@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>QuasimorphCoop</AssemblyName>
+    <RootNamespace>QuasimorphCoop</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <DebugType>none</DebugType>
+
+    <!-- Override any of these on the command line, e.g. -p:QuasimorphDir=/path/to/Quasimorph -->
+    <QuasimorphDir Condition="'$(QuasimorphDir)' == ''">$(HOME)/.local/share/Steam/steamapps/common/Quasimorph</QuasimorphDir>
+    <QuasimorphManaged>$(QuasimorphDir)/Quasimorph_Data/Managed</QuasimorphManaged>
+    <!-- Unity persistentDataPath inside the Proton prefix; local (non-Workshop) mods load from LocalUserPresets/<mod>/ -->
+    <QuasimorphUserData Condition="'$(QuasimorphUserData)' == ''">$(HOME)/.local/share/Steam/steamapps/compatdata/2059170/pfx/drive_c/users/steamuser/AppData/LocalLow/Magnum Scriptum Ltd/Quasimorph</QuasimorphUserData>
+    <ModDeployDir>$(QuasimorphUserData)/LocalUserPresets/QuasimorphCoop</ModDeployDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Game assemblies are referenced in place and never copied or committed. -->
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp" HintPath="$(QuasimorphManaged)/Assembly-CSharp.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(QuasimorphManaged)/0Harmony.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(QuasimorphManaged)/UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(QuasimorphManaged)/UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="netstandard" HintPath="$(QuasimorphManaged)/netstandard.dll" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="modmanifest.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- dotnet build -p:Deploy=true copies the mod into the game's local mod folder. -->
+  <Target Name="DeployMod" AfterTargets="Build" Condition="'$(Deploy)' == 'true'">
+    <MakeDir Directories="$(ModDeployDir)" />
+    <Copy SourceFiles="$(OutDir)QuasimorphCoop.dll;$(OutDir)modmanifest.json" DestinationFolder="$(ModDeployDir)" />
+    <Message Importance="high" Text="Deployed to $(ModDeployDir)" />
+  </Target>
+
+</Project>

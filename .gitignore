@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+# Never commit game binaries or decompiled game code
+*.dll
+decompiled/

@@ -1,0 +1,11 @@
+{
+  "UniqueModName": "Quarles99_QuasimorphCoop",
+  "Assemblies": [
+    "QuasimorphCoop.dll"
+  ],
+  "Dependencies": [],
+  "SteamTags": [
+    "1.0",
+    "Gameplay Tweaks"
+  ]
+}
