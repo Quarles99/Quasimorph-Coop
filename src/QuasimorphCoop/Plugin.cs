@@ -29,12 +29,14 @@ namespace QuasimorphCoop
         {
             PartyPersistence.Pending = null;
             PartyPersistence.FinishSnapshot = null;
+            Lockstep.LockstepTest.OnMainMenu(context);
         }
 
         [Hook(ModHookType.DungeonStarted)]
         public static void DungeonStarted(IModContext context)
         {
             CoopSession.Begin(context.State);
+            Lockstep.LockstepTest.OnDungeonStarted();
         }
 
         [Hook(ModHookType.DungeonFinished)]
