@@ -29,6 +29,11 @@
     <Reference Include="UnityEngine" HintPath="$(QuasimorphManaged)/UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(QuasimorphManaged)/UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="UnityEngine.InputLegacyModule" HintPath="$(QuasimorphManaged)/UnityEngine.InputLegacyModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(QuasimorphManaged)/UnityEngine.UI.dll" Private="false" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(QuasimorphManaged)/Unity.TextMeshPro.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="$(QuasimorphManaged)/UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ScreenCaptureModule" HintPath="$(QuasimorphManaged)/UnityEngine.ScreenCaptureModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ImageConversionModule" HintPath="$(QuasimorphManaged)/UnityEngine.ImageConversionModule.dll" Private="false" />
     <Reference Include="netstandard" HintPath="$(QuasimorphManaged)/netstandard.dll" Private="false" />
     <Reference Include="com.rlabrecque.steamworks.net" HintPath="$(QuasimorphManaged)/com.rlabrecque.steamworks.net.dll" Private="false" />
   </ItemGroup>

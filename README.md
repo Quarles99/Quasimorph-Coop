@@ -26,7 +26,7 @@ dotnet build src/QuasimorphCoop -c Release -p:Deploy=true
 `Deploy=true` copies the mod to the game's local mod folder:
 `<persistentDataPath>/LocalUserPresets/QuasimorphCoop/`. Defaults assume Steam on Linux with Proton. Override `QuasimorphDir` and/or `QuasimorphUserData` for other setups.
 
-## Testing milestone 1
+## Local hotseat with console commands
 
 Back up your save folder first. Steam Cloud will sync whatever happens to it.
 
@@ -50,18 +50,18 @@ Both players need the **same game version and the exact same mod build**. The ho
 `%USERPROFILE%\AppData\LocalLow\Magnum Scriptum Ltd\Quasimorph\LocalUserPresets\`
 so that you get `...\LocalUserPresets\QuasimorphCoop\QuasimorphCoop.dll`. Start the game once and check that the mod is listed.
 
-**Starting a session:**
-1. Host: start a mission. Open the console (`` ` ``) and run `coop_add <index>` to add the merc your friend will play.
-2. Host: run `coop_host`. A friends-only lobby is created and the Steam invite dialog opens. The lobby id is also shown.
-3. Friend: **be on the main menu** and accept the invite. If the overlay invite doesn't work, the friend can open the console on the main menu and run `coop_join <lobbyid>` instead.
-4. The host's game saves and sends the save (about 1.3 MB). Both games load it; the friend's copy goes into hidden slot 9, so their own saves aren't touched. Then you get "Co-op started".
-5. The host controls the first merc and the friend controls the second. During the other player's turn your input is blocked and you watch their merc.
+**Starting a session (no console needed):**
+1. Host: load your game. Press Esc, open **Co-op**, and click **Partner** until it shows the merc your friend will play. The choice is remembered for that save. From now on the partner joins you automatically at every mission start and floor change; this also works for local hotseat without going online.
+2. Host: in the same menu, click **Host online**. A friends-only lobby is created and the Steam invite dialog opens (**Invite friend** reopens it).
+3. Friend: on the main menu, either accept the Steam invite, or open **Co-op** and click **Join <host name>**.
+4. Whenever the host starts a level with the partner on it, the host's game saves and sends the level (about 1.3 MB), and both games load it. The friend's copy goes into hidden slot 9, so their own saves aren't touched. This repeats automatically after every floor change and at every mission start; you only connect once.
+5. The host controls their own merc and the friend controls the partner. During the other player's turn your input is blocked and you watch their merc.
 
-`coop_net` shows the session state. `coop_leave` ends the session; the mission continues as local hotseat.
+**Leave co-op** in the same menu ends the session; the mission continues as local hotseat. Going back to the main menu also ends it. The console commands (`coop_add`, `coop_host`, `coop_join <lobbyid>`, `coop_leave`, `coop_net`) still exist for troubleshooting.
 
 **What's synced:** moving, shooting, reload key, swapping weapons and fire modes, movement speed, skip turn, facing, doors, ultimate perks. After every action point both games compare a fingerprint of the state (positions, facing, HP, inventory counts, weapon). If they ever differ, both get a "went out of sync" message and the details go to `Player.log`.
 
-**Not synced yet:** picking up items and looting (blocked during a session), inventory and health screens (using them causes a desync), reloading with a chosen ammo type (blocked), and changing floors or ending the mission (the session ends; host again on the new floor). The friend plays in a copy of the host's world, so nothing carries back to the friend's own save yet.
+**Not synced yet:** picking up items and looting (blocked during a session), inventory and health screens (using them causes a desync), and reloading with a chosen ammo type (blocked). Between levels (on the ship) nothing is synced; the friend's game just waits. The friend plays in a copy of the host's world, so nothing carries back to the friend's own save yet.
 
 ## Known limitations (milestone 1)
 

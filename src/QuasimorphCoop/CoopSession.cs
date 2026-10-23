@@ -46,8 +46,19 @@ namespace QuasimorphCoop
             if (primary != null)
             {
                 PartyPersistence.SpawnPending();
+                Partner.AutoAdd();
             }
             PartyPersistence.Pending = null;
+        }
+
+        public static string DisplayName(Mercenary mercenary)
+        {
+            if (mercenary == null)
+            {
+                return "?";
+            }
+            string name = Localization.Get("monster." + mercenary.ProfileId + ".name");
+            return name.StartsWith("monster.") ? mercenary.ProfileId : name;
         }
 
         public static void End()

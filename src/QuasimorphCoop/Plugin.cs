@@ -31,7 +31,20 @@ namespace QuasimorphCoop
             PartyPersistence.Pending = null;
             PartyPersistence.FinishSnapshot = null;
             Lockstep.LockstepTest.OnMainMenu(context);
+            Net.NetSession.OnMainMenuStarted();
             Net.SteamNet.Instance?.JoinPendingLobby();
+        }
+
+        [Hook(ModHookType.SpaceStarted)]
+        public static void SpaceStarted(IModContext context)
+        {
+            Net.NetSession.OnSpaceStarted();
+        }
+
+        [Hook(ModHookType.SpaceFinished)]
+        public static void SpaceFinished(IModContext context)
+        {
+            Net.NetSession.OnSpaceFinished();
         }
 
         [Hook(ModHookType.DungeonStarted)]

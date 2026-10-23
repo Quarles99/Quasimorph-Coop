@@ -13,22 +13,26 @@ namespace QuasimorphCoop.Net
 {
     // Networked hotseat over Steam. Both machines run the same simulation in lockstep:
     //
-    // 1. Host (in a mission with a 2-merc party) runs coop_host and invites a friend.
-    // 2. Friend accepts from the main menu; their game sends Hello (versions).
-    // 3. Host saves, sends its slot files, and both machines load that same save
-    //    (client into hidden slot 9). Party merc 0 belongs to the host, merc 1 to the client.
-    // 4. Once both are in, the host sends a seed for the gameplay RNG and lockstep starts.
-    // 5. Whoever owns the active merc plays normally; their inputs (queued commands plus the few
+    // 1. Host picks a partner merc and hosts from the pause menu; the friend joins from their main
+    //    menu (Steam invite or the friends list in the Co-op menu). Their game sends Hello (versions).
+    // 2. The connection then lasts across floors and missions. Every time the host starts a level
+    //    with the partner on the map, it saves, sends its slot files, and both machines load that
+    //    same save (the friend into hidden slot 9). Party merc 0 belongs to the host, merc 1 to the friend.
+    // 3. Once both are in, the host sends a seed for the gameplay RNG and lockstep starts. It stops
+    //    when the level ends; the next level start syncs again (a new floor is generated from a
+    //    time-based seed, so the two machines can't generate it independently).
+    // 4. Whoever owns the active merc plays normally; their inputs (queued commands plus the few
     //    direct actions) are sent and replayed on the other machine at the same action point.
     //    The other machine blocks local input meanwhile. After every action point both sides
     //    exchange a state hash to catch desyncs.
     internal static class NetSession
     {
-        public const string ProtocolVersion = "1";
+        public const string ProtocolVersion = "2";
 
         private enum Role { None, Host, Client }
 
-        private enum Phase { Idle, Lobby, Handshake, Loading, WaitingGo, Running }
+        // Order matters: everything from AwaitingWorld up blocks unsent local actions (Engaged).
+        private enum Phase { Idle, Lobby, Handshake, Connected, AwaitingWorld, Loading, WaitingGo, Running }
 
         private sealed class Batch
         {
@@ -51,6 +55,7 @@ namespace QuasimorphCoop.Net
         private static bool _desyncReported;
 
         private static readonly Dictionary<string, byte[][]> _incoming = new Dictionary<string, byte[][]>();
+        private static Dictionary<string, byte[]> _pendingWorld;
         private static int _seed;
         private static bool _hostLoaded;
         private static bool _clientReady;
@@ -67,12 +72,36 @@ namespace QuasimorphCoop.Net
 
         public static bool Replaying { get; private set; }
 
-        // A session is being set up or running: local actions must not reach the simulation unsent.
-        public static bool Engaged => _phase >= Phase.Loading;
+        // A level is being synced or played together: local actions must not reach the simulation unsent.
+        public static bool Engaged => _phase >= Phase.AwaitingWorld;
 
         public static bool Running => _phase == Phase.Running;
 
+        public static bool Active => _phase != Phase.Idle;
+
+        public static bool IsHost => _role == Role.Host;
+
         public static string Status => $"role={_role} phase={_phase} peer={SteamNet.Instance?.PeerName ?? "none"} ap={_apSeq} inbox={_inbox.Count}";
+
+        // One line for the Co-op menu.
+        public static string Summary
+        {
+            get
+            {
+                string peer = SteamNet.Instance?.PeerName ?? "friend";
+                switch (_phase)
+                {
+                    case Phase.Idle: return "Not connected";
+                    case Phase.Lobby: return "Hosting - invite a friend";
+                    case Phase.Handshake: return $"Connecting to {peer}...";
+                    case Phase.Connected: return _role == Role.Host ? $"{peer} connected - start a level" : $"With {peer} - waiting for host";
+                    case Phase.AwaitingWorld:
+                    case Phase.Loading:
+                    case Phase.WaitingGo: return $"Syncing with {peer}...";
+                    default: return $"Playing with {peer}";
+                }
+            }
+        }
 
         private static int LocalOwner => _role == Role.Host ? 0 : 1;
 
@@ -106,41 +135,53 @@ namespace QuasimorphCoop.Net
             }
         }
 
+        internal static State GetGlobalState()
+        {
+            GameModeStateMachine machine = UnityEngine.Object.FindObjectOfType<GameModeStateMachine>();
+            return machine == null ? null : Traverse.Create(machine).Field("_state").GetValue<State>();
+        }
+
         // ---------------------------------------------------------------- setup
 
+        // From the pause menu, on the ship or in a mission.
         public static string StartHosting()
         {
             if (_phase != Phase.Idle)
             {
-                return "A co-op session is already active: " + Status;
+                return "Already in a co-op session.";
             }
             if (!SteamNet.SteamReady)
             {
-                return "Steam isn't initialized.";
+                return "Steam isn't available.";
             }
-            if (!CoopSession.InDungeon || CoopSession.Party.Count != 2)
+            if (GetGlobalState()?.Get<SavedGameMetadata>() == null)
             {
-                return "Start a mission and add your friend's merc first (coop_add <index>); the party must have exactly 2 mercs.";
+                return "Load a game first.";
             }
             _role = Role.Host;
             _phase = Phase.Lobby;
             SteamNet.Ensure();
             SteamNet.Instance.CreateLobby();
-            return $"Creating a friends-only lobby. Your friend will play {CoopSession.Party[1].Mercenary?.AgentName}. "
-                + "They must have the same game version and this mod, and be on the main menu when they accept.";
+            return "Creating a friends-only lobby...";
+        }
+
+        public static void InviteFriend()
+        {
+            SteamNet.Instance?.OpenInviteDialog();
         }
 
         public static void OnJoinedHost()
         {
             if (UnityEngine.Object.FindObjectOfType<MainMenuGameMode>() == null)
             {
-                Notify("Co-op: go back to the main menu, then accept the invite again.");
+                Notify("Co-op: go back to the main menu, then join again.");
                 SteamNet.Instance.Leave();
                 return;
             }
             _role = Role.Client;
             _phase = Phase.Handshake;
             _incoming.Clear();
+            _pendingWorld = null;
             State state = GetGlobalState();
             SteamNet.Instance.Send(Wire.Build(MsgType.Hello, w =>
             {
@@ -150,11 +191,6 @@ namespace QuasimorphCoop.Net
                 w.Write(state != null ? ModList(state) : "");
             }));
             Notify($"Co-op: connecting to {SteamNet.Instance.PeerName}...");
-        }
-
-        private static State GetGlobalState()
-        {
-            return Traverse.Create(UnityEngine.Object.FindObjectOfType<GameModeStateMachine>()).Field("_state").GetValue<State>();
         }
 
         public static void Leave(string reason)
@@ -179,20 +215,26 @@ namespace QuasimorphCoop.Net
         {
             Log.Warn($"Session ended ({reason}) at {Status}.");
             Notify("Co-op ended: " + reason);
+            StopLockstep();
+            _loopback = Loopback.None;
+            _phase = Phase.Idle;
+            _role = Role.None;
+            _incoming.Clear();
+            _pendingWorld = null;
+            _hostLoaded = _clientReady = false;
+            SteamNet.Instance?.Leave();
+        }
+
+        private static void StopLockstep()
+        {
             if (_subscribed != null)
             {
                 _subscribed.OnActionPointsProcessed -= OnActionPointProcessed;
                 _subscribed = null;
             }
             GameplayRng.Enabled = false;
-            _loopback = Loopback.None;
-            _phase = Phase.Idle;
-            _role = Role.None;
             _inbox.Clear();
             _outbox.Clear();
-            _incoming.Clear();
-            _hostLoaded = _clientReady = false;
-            SteamNet.Instance?.Leave();
         }
 
         // ---------------------------------------------------------------- messages
@@ -205,6 +247,7 @@ namespace QuasimorphCoop.Net
                 switch (type)
                 {
                     case MsgType.Hello: OnHello(r); break;
+                    case MsgType.Welcome: OnWelcome(); break;
                     case MsgType.Reject: Stop("host rejected: " + r.ReadString()); break;
                     case MsgType.FileChunk: OnFileChunk(r); break;
                     case MsgType.FilesDone: OnFilesDone(r); break;
@@ -225,7 +268,7 @@ namespace QuasimorphCoop.Net
                 return;
             }
             string protocol = r.ReadString(), gameVersion = r.ReadString(), modHash = r.ReadString(), mods = r.ReadString();
-            string myMods = ModList(CoopSession.State);
+            string myMods = ModList(GetGlobalState());
             string reason = protocol != ProtocolVersion ? $"protocol {protocol} vs {ProtocolVersion}"
                 : gameVersion != Application.version ? $"game version {gameVersion} vs {Application.version}"
                 : modHash != ModHash ? $"co-op mod build {modHash} vs {ModHash}"
@@ -242,7 +285,39 @@ namespace QuasimorphCoop.Net
                 Log.Warn($"Mod lists differ (may desync). Host: {myMods} Client: {mods}");
                 Notify("Co-op warning: your mod lists differ; this can cause desyncs.");
             }
-            Notify($"Co-op: {SteamNet.Instance.PeerName} joined. Syncing...");
+            SteamNet.Instance.Send(Wire.Build(MsgType.Welcome));
+            _phase = Phase.Connected;
+            Notify($"Co-op: {SteamNet.Instance.PeerName} joined.");
+            HostSyncIfPossible();
+        }
+
+        private static void OnWelcome()
+        {
+            if (_role == Role.Client && _phase == Phase.Handshake)
+            {
+                _phase = Phase.Connected;
+                Notify($"Co-op: connected to {SteamNet.Instance.PeerName}. Waiting for them to start a level.");
+            }
+        }
+
+        // Host: start playing together on the current level, if there is one and the partner is on it.
+        public static void HostSyncIfPossible()
+        {
+            if (_role != Role.Host || _phase != Phase.Connected)
+            {
+                return;
+            }
+            if (!CoopSession.InDungeon)
+            {
+                Notify($"Co-op: {SteamNet.Instance.PeerName} will join you when you start a mission.");
+                return;
+            }
+            if (CoopSession.Party.Count != 2)
+            {
+                Notify("Co-op: pick a partner merc in the Co-op menu so your friend has someone to play.");
+                return;
+            }
+            Notify($"Co-op: syncing this level with {SteamNet.Instance.PeerName}...");
             SendWorldAndReload();
         }
 
@@ -304,19 +379,29 @@ namespace QuasimorphCoop.Net
                 yield return null;
             }
             Log.Info($"Sent {files.Count} files ({files.Values.Sum(f => f.Length)} bytes, {chunks.Count} messages) from slot {slot}; reloading it.");
-            SteamNet.Instance.StartCoroutine(ReloadSlot(slot));
+            SteamNet.Instance.StartCoroutine(LoadSlot(slot));
         }
 
-        // Same as the game's LoadLastSave, but from the regular (non-auto) save.
-        internal static IEnumerator ReloadSlot(int slot)
+        // Loads a save slot from whatever mode the game is in (menu, ship or mission), like the
+        // game's own LoadLastSave but for the regular save.
+        internal static IEnumerator LoadSlot(int slot)
         {
+            _onShip = false;
             GameModeStateMachine machine = UnityEngine.Object.FindObjectOfType<GameModeStateMachine>();
+            if (UnityEngine.Object.FindObjectOfType<MainMenuGameMode>() != null)
+            {
+                AccessTools.Method(typeof(GameModeStateMachine), "MainMenuFinished").Invoke(machine, new object[] { false, slot, null });
+                yield break;
+            }
             AccessTools.Method(typeof(GameModeStateMachine), "KillDungeon").Invoke(machine, Array.Empty<object>());
+            AccessTools.Method(typeof(GameModeStateMachine), "KillSpaceMode").Invoke(machine, Array.Empty<object>());
             yield return new WaitForEndOfFrame();
             IEnumerator start = (IEnumerator)AccessTools.Method(typeof(GameModeStateMachine), "ProcessStartGame")
                 .Invoke(machine, new object[] { false, slot, null, false });
             machine.StartCoroutine(start);
         }
+
+        internal static IEnumerator ReloadSlot(int slot) => LoadSlot(slot);
 
         private static void OnFileChunk(BinaryReader r)
         {
@@ -339,46 +424,102 @@ namespace QuasimorphCoop.Net
                 Leave($"incomplete transfer ({_incoming.Count}/{count} files)");
                 return;
             }
-            Dictionary<string, byte[]> files = _incoming.ToDictionary(kv => kv.Key, kv => kv.Value.SelectMany(c => c).ToArray());
+            _pendingWorld = _incoming.ToDictionary(kv => kv.Key, kv => kv.Value.SelectMany(c => c).ToArray());
             _incoming.Clear();
-            SlotFiles.Write(SlotFiles.ClientSlot, files);
-            Log.Info($"Received {files.Count} files ({files.Values.Sum(f => f.Length)} bytes); loading slot {SlotFiles.ClientSlot}.");
+            Log.Info($"Received {_pendingWorld.Count} files ({_pendingWorld.Values.Sum(f => f.Length)} bytes).");
+            TryLoadPendingWorld();
+        }
+
+        // The world can arrive while this game is itself mid-transition (e.g. generating its own copy
+        // of the next floor); only load once it has settled into a menu, the ship or a level.
+        private static void TryLoadPendingWorld()
+        {
+            if (_pendingWorld == null || _role != Role.Client)
+            {
+                return;
+            }
+            bool settled = UnityEngine.Object.FindObjectOfType<MainMenuGameMode>() != null
+                || (SingletonMonoBehaviour<DungeonGameMode>.Instance != null && SingletonMonoBehaviour<DungeonGameMode>.Instance.Initialized)
+                || _onShip;
+            if (!settled)
+            {
+                Log.Info("World received while loading; will load it once settled.");
+                return;
+            }
+            SlotFiles.Write(SlotFiles.ClientSlot, _pendingWorld);
+            _pendingWorld = null;
+            Log.Info($"Loading host's world from slot {SlotFiles.ClientSlot}.");
             _phase = Phase.Loading;
-            GameModeStateMachine machine = UnityEngine.Object.FindObjectOfType<GameModeStateMachine>();
-            AccessTools.Method(typeof(GameModeStateMachine), "MainMenuFinished").Invoke(machine, new object[] { false, SlotFiles.ClientSlot, null });
+            SteamNet.Instance.StartCoroutine(LoadSlot(SlotFiles.ClientSlot));
+        }
+
+        private static bool _onShip;
+
+        public static void OnSpaceStarted()
+        {
+            _onShip = true;
+            TryLoadPendingWorld();
+        }
+
+        public static void OnSpaceFinished()
+        {
+            _onShip = false;
+        }
+
+        public static void OnMainMenuStarted()
+        {
+            if (_phase != Phase.Idle && _phase != Phase.Handshake)
+            {
+                Leave("returned to the main menu");
+            }
         }
 
         public static void OnDungeonStarted()
         {
-            if (_phase != Phase.Loading)
+            switch (_phase)
             {
-                return;
-            }
-            if (CoopSession.Party.Count != 2)
-            {
-                Leave($"party has {CoopSession.Party.Count} mercs after loading, expected 2");
-                return;
-            }
-            if (_role == Role.Host)
-            {
-                _hostLoaded = true;
-                Log.Info("Host reloaded.");
-                TryGo();
-            }
-            else
-            {
-                _phase = Phase.WaitingGo;
-                SteamNet.Instance.Send(Wire.Build(MsgType.Ready));
-                Log.Info("Loaded; waiting for host.");
+                case Phase.Loading:
+                    if (CoopSession.Party.Count != 2)
+                    {
+                        Leave($"party has {CoopSession.Party.Count} mercs after loading, expected 2");
+                        return;
+                    }
+                    if (_role == Role.Host)
+                    {
+                        _hostLoaded = true;
+                        Log.Info("Host reloaded.");
+                        TryGo();
+                    }
+                    else
+                    {
+                        _phase = Phase.WaitingGo;
+                        SteamNet.Instance.Send(Wire.Build(MsgType.Ready));
+                        Log.Info("Loaded; waiting for host.");
+                    }
+                    break;
+                case Phase.Connected:
+                    if (_role == Role.Host)
+                    {
+                        HostSyncIfPossible();
+                    }
+                    else
+                    {
+                        // Our own copy of a new level; the host's version is on its way.
+                        _phase = Phase.AwaitingWorld;
+                        TryLoadPendingWorld();
+                    }
+                    break;
             }
         }
 
         public static void OnDungeonFinished()
         {
-            if (_phase != Phase.Idle && _phase != Phase.Loading)
+            // The host's own reload also tears the level down; that's part of Loading.
+            if (_phase == Phase.Running || _phase == Phase.WaitingGo || _phase == Phase.AwaitingWorld)
             {
-                // A new floor is generated from a time-based seed, so the two worlds would differ.
-                Stop("the mission or floor ended; host again on the new floor");
+                StopLockstep();
+                _phase = Phase.Connected;
+                Log.Info("Level ended; lockstep paused until the next level syncs.");
             }
         }
 
@@ -409,7 +550,7 @@ namespace QuasimorphCoop.Net
             Log.Info($"Lockstep running as {_role} (loopback {_loopback}), seed {seed}; local merc '{mine.Mercenary?.ProfileId}'.");
             if (_loopback == Loopback.None)
             {
-                Notify($"Co-op started with {SteamNet.Instance.PeerName}. You control {mine.Mercenary?.AgentName}.");
+                Notify($"Co-op: playing with {SteamNet.Instance.PeerName}. You control {CoopSession.DisplayName(mine.Mercenary)}.");
             }
         }
 

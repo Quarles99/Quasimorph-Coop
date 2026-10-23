@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using Steamworks;
@@ -82,6 +83,36 @@ namespace QuasimorphCoop.Net
                 _pendingLobby = CSteamID.Nil;
                 JoinLobby(lobby);
             }
+        }
+
+        public void OpenInviteDialog()
+        {
+            if (Lobby != CSteamID.Nil)
+            {
+                SteamFriends.ActivateGameOverlayInviteDialog(Lobby);
+            }
+        }
+
+        // Friends currently in a Quasimorph lobby (i.e. hosting co-op), for the main menu's join list.
+        public List<KeyValuePair<string, CSteamID>> FriendsHosting()
+        {
+            var result = new List<KeyValuePair<string, CSteamID>>();
+            if (!SteamReady)
+            {
+                return result;
+            }
+            AppId_t app = SteamUtils.GetAppID();
+            int count = SteamFriends.GetFriendCount(EFriendFlags.k_EFriendFlagImmediate);
+            for (int i = 0; i < count; i++)
+            {
+                CSteamID friend = SteamFriends.GetFriendByIndex(i, EFriendFlags.k_EFriendFlagImmediate);
+                if (SteamFriends.GetFriendGamePlayed(friend, out FriendGameInfo_t game) && game.m_gameID.AppID() == app
+                    && game.m_steamIDLobby.IsValid() && game.m_steamIDLobby != CSteamID.Nil)
+                {
+                    result.Add(new KeyValuePair<string, CSteamID>(SteamFriends.GetFriendPersonaName(friend), game.m_steamIDLobby));
+                }
+            }
+            return result;
         }
 
         public void CreateLobby()

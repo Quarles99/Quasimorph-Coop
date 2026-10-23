@@ -19,7 +19,8 @@ namespace QuasimorphCoop.Net
         Batch,          // either: player actions for the sender's merc
         Hash,           // either: state fingerprint after an action point
         Bye,            // either: leaving the session
-        Ping            // either: keepalive
+        Ping,           // either: keepalive
+        Welcome         // host -> client: accepted, connection lasts across levels
     }
 
     // Actions that bypass PlayerCommandQueue and are called directly from input handling.

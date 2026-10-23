@@ -28,6 +28,7 @@ namespace QuasimorphCoop.Lockstep
         private System.Random _botRng;
         private bool _running;
         private bool _botEnabled = true;
+        private Menus.MenuTest _menuTest;
         private int _apSeq;
         private int _playerAps;
         private float _lastApTime;
@@ -75,6 +76,12 @@ namespace QuasimorphCoop.Lockstep
             _startTime = Time.realtimeSinceStartup;
 
             Log.Info($"LOCKSTEP test configured: {string.Join(" ", cfg.Select(kv => kv.Key + "=" + kv.Value))}");
+            if (Get("menutest", "0") == "1")
+            {
+                File.Delete(Path.Combine(modPath, "menutest.log"));
+                _menuTest = Menus.MenuTest.Start(modPath, int.Parse(Get("slot", "8"), CultureInfo.InvariantCulture));
+                return;
+            }
             StartCoroutine(LoadSlotFromMenu(int.Parse(Get("slot", "8"), CultureInfo.InvariantCulture)));
         }
 
@@ -92,6 +99,11 @@ namespace QuasimorphCoop.Lockstep
         {
             if (_instance == null)
             {
+                return;
+            }
+            if (_instance._menuTest != null)
+            {
+                _instance._menuTest.OnDungeonStarted();
                 return;
             }
             if (_instance._selftestStage == 1)
