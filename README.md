@@ -2,7 +2,7 @@
 
 An experimental mod that adds a second player-controlled merc to Quasimorph missions, with the goal of eventual online co-op.
 
-**Status: milestone 2 (online, first pass).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Online play is new and has only been tested on one machine so far (see "Testing" below).
+**Status: milestone 2 (online, first pass).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Online play is new and has only been tested on one machine so far.
 
 ## How it works
 
