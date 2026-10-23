@@ -44,7 +44,7 @@ grep QMCoop ~/.local/share/Steam/steamapps/compatdata/2059170/pfx/drive_c/users/
 
 ## Known limitations (milestone 1)
 
-- **Not saved mid-mission.** The second merc isn't written into the dungeon save, so reloading drops them.
+- **Party saves use a side file.** The dungeon save has room for only one player, so party mercs are stored in a small file next to each dungeon save (`[autosave_]slot_N_coop_<location>.dat`). They respawn when you reload, and follow you to the next floor next to your merc. Only roster mercs come back; `coop_add temp` mercs are dropped. Saves made before this feature have no side file, so re-add the merc once.
 - **Second merc's state persists immediately.** Their `Mercenary` data is shared with the roster, so gear and wounds stick whether or not they extract. If they die, their roster entry is left dead and untested.
 - **Mission result follows the primary merc.** If the primary dies and the second merc extracts, the mission resolves as the primary's.
 - **Fog of war.** It shows only the active merc's vision.

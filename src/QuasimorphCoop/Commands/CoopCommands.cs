@@ -11,10 +11,6 @@ namespace QuasimorphCoop.Commands
     [ConsoleCommand(new string[] { "coop_add" })]
     public class CoopAddCommand
     {
-        private const ObstacleType BlockingMask = ObstacleType.Wall | ObstacleType.Obj | ObstacleType.Deep | ObstacleType.Fence
-            | ObstacleType.Monster | ObstacleType.PlayerAlly | ObstacleType.Player | ObstacleType.ClosedDoor
-            | ObstacleType.BlockedDoor | ObstacleType.Unexplored;
-
         public static string Help(string command, bool verbose)
         {
             return "Adds a second player-controlled merc at the cell under the mouse cursor. "
@@ -49,13 +45,13 @@ namespace QuasimorphCoop.Commands
             }
 
             CellPosition position = CoopSession.State.Get<MapRenderer>().GetCellUnderCursor();
-            string invalid = ValidateSpawnCell(position);
+            string invalid = CoopSession.WhyCellBlocked(position);
             if (invalid != null)
             {
-                return invalid;
+                return invalid + " Point the mouse at an empty, explored floor cell.";
             }
 
-            Player player = CoopSession.AddMerc(mercenary, position);
+            CoopSession.AddMerc(mercenary, position);
             return $"Added {mercenary.AgentName} ({mercenary.ProfileId}) at {position.X},{position.Y}. Party size {CoopSession.Party.Count}.";
         }
 
@@ -97,20 +93,6 @@ namespace QuasimorphCoop.Commands
             Mercenary mercenary = MercenarySystem.GenerateMercenary(profile, primary.MercClassId, perks);
             Log.Info($"Generated temporary merc from profile '{profile.Id}'.");
             return mercenary;
-        }
-
-        private static string ValidateSpawnCell(CellPosition position)
-        {
-            MapCell cell = CoopSession.State.Get<MapGrid>().GetCell(position);
-            if (cell == null)
-            {
-                return $"Cell {position.X},{position.Y} is outside the map.";
-            }
-            if ((cell.PassConditionMask & BlockingMask) != 0 || CoopSession.Creatures.GetCreature(position) != null)
-            {
-                return $"Cell {position.X},{position.Y} is blocked ({cell.PassConditionMask}). Point the mouse at an empty, explored floor cell.";
-            }
-            return null;
         }
 
         public static List<string> FetchAutocompleteOptions(string command, string[] tokens)

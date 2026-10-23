@@ -43,6 +43,11 @@ namespace QuasimorphCoop
                 _party.Add(primary);
             }
             Log.Info($"Dungeon started; primary merc '{primary?.Mercenary?.ProfileId}'.");
+            if (primary != null)
+            {
+                PartyPersistence.SpawnPending();
+            }
+            PartyPersistence.Pending = null;
         }
 
         public static void End()
@@ -154,6 +159,55 @@ namespace QuasimorphCoop
             }
             Log.Info($"Collapsed party of {_party.Count} back to primary.");
             _party.RemoveRange(1, _party.Count - 1);
+        }
+
+        private const ObstacleType BlockingMask = ObstacleType.Wall | ObstacleType.Obj | ObstacleType.Deep | ObstacleType.Fence
+            | ObstacleType.Monster | ObstacleType.PlayerAlly | ObstacleType.Player | ObstacleType.ClosedDoor
+            | ObstacleType.BlockedDoor;
+
+        // Null if a merc can stand on the cell, otherwise why not.
+        public static string WhyCellBlocked(CellPosition position, bool allowUnexplored = false)
+        {
+            MapCell cell = State.Get<MapGrid>().GetCell(position);
+            if (cell == null)
+            {
+                return $"Cell {position.X},{position.Y} is outside the map.";
+            }
+            ObstacleType mask = allowUnexplored ? BlockingMask : BlockingMask | ObstacleType.Unexplored;
+            if ((cell.PassConditionMask & mask) != 0 || Creatures.GetCreature(position) != null)
+            {
+                return $"Cell {position.X},{position.Y} is blocked ({cell.PassConditionMask}).";
+            }
+            return null;
+        }
+
+        // The cell itself if free, else the nearest free cell in growing square rings.
+        public static bool FindFreeCellNear(CellPosition center, out CellPosition result)
+        {
+            foreach (bool allowUnexplored in new[] { false, true })
+            {
+                for (int radius = 0; radius <= 6; radius++)
+                {
+                    for (int dx = -radius; dx <= radius; dx++)
+                    {
+                        for (int dy = -radius; dy <= radius; dy++)
+                        {
+                            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != radius)
+                            {
+                                continue;
+                            }
+                            CellPosition candidate = new CellPosition(center.X + dx, center.Y + dy);
+                            if (WhyCellBlocked(candidate, allowUnexplored) == null)
+                            {
+                                result = candidate;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            result = center;
+            return false;
         }
 
         public static Player FirstAliveOtherThan(Player player)

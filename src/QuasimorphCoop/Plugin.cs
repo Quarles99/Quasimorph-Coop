@@ -23,6 +23,14 @@ namespace QuasimorphCoop
             Log.Info("Loaded; Harmony patches applied, dev console enabled (backquote key).");
         }
 
+        // Loads from the menu happen after this, so anything still pending here is stale.
+        [Hook(ModHookType.MainMenuStarted)]
+        public static void MainMenuStarted(IModContext context)
+        {
+            PartyPersistence.Pending = null;
+            PartyPersistence.FinishSnapshot = null;
+        }
+
         [Hook(ModHookType.DungeonStarted)]
         public static void DungeonStarted(IModContext context)
         {
