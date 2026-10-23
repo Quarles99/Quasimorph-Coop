@@ -27,6 +27,7 @@ namespace QuasimorphCoop.Lockstep
         private int _maxPlayerAps;
         private System.Random _botRng;
         private bool _running;
+        private bool _botEnabled = true;
         private int _apSeq;
         private int _playerAps;
         private float _lastApTime;
@@ -115,6 +116,15 @@ namespace QuasimorphCoop.Lockstep
 
             _turnController = state.Get<TurnController>();
             SpawnTestMonsters(state);
+
+            // net=record|play routes the bot's inputs through the real netcode via a file.
+            string net = Get("net", "none");
+            if (net != "none")
+            {
+                Net.NetSession.Loopback mode = net == "record" ? Net.NetSession.Loopback.Record : Net.NetSession.Loopback.Play;
+                Net.NetSession.StartLoopback(mode, Path.Combine(Path.GetDirectoryName(_logPath), Get("netfile", "loopback.bin")), seed);
+                _botEnabled = mode == Net.NetSession.Loopback.Record;
+            }
             _turnController.OnActionPointsProcessed += OnActionPointProcessed;
             _running = true;
             _lastApTime = Time.realtimeSinceStartup;
@@ -193,7 +203,10 @@ namespace QuasimorphCoop.Lockstep
                 Finish($"STALL no AP for 60s; current={_turnController.CurrentProcessable?.GetType().Name} showing=[{showing}]");
                 return;
             }
-            DriveBot();
+            if (_botEnabled)
+            {
+                DriveBot();
+            }
         }
 
         // One decision per frame while it's a player AP: shoot the nearest visible enemy, else step

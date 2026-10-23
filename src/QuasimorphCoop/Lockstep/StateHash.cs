@@ -34,6 +34,7 @@ namespace QuasimorphCoop.Lockstep
                 sb.Append(' ').Append(d.UniqueId.ToString(CultureInfo.InvariantCulture))
                     .Append('@').Append(d.Position.X.ToString(CultureInfo.InvariantCulture))
                     .Append(',').Append(d.Position.Y.ToString(CultureInfo.InvariantCulture))
+                    .Append('d').Append(((int)d.LookDirection).ToString(CultureInfo.InvariantCulture))
                     .Append('h').Append(d.Health.Value.ToString(CultureInfo.InvariantCulture))
                     .Append(d.Health.Alive ? "" : "x");
             }

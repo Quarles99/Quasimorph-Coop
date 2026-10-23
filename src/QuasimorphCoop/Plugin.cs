@@ -20,6 +20,7 @@ namespace QuasimorphCoop
                 new Harmony(HarmonyId).PatchAll(typeof(Plugin).Assembly);
                 _patched = true;
             }
+            Net.SteamNet.Ensure();
             Log.Info("Loaded; Harmony patches applied, dev console enabled (backquote key).");
         }
 
@@ -37,11 +38,13 @@ namespace QuasimorphCoop
         {
             CoopSession.Begin(context.State);
             Lockstep.LockstepTest.OnDungeonStarted();
+            Net.NetSession.OnDungeonStarted();
         }
 
         [Hook(ModHookType.DungeonFinished)]
         public static void DungeonFinished(IModContext context)
         {
+            Net.NetSession.OnDungeonFinished();
             CoopSession.End();
         }
     }

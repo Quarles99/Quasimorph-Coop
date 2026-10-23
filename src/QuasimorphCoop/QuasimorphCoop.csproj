@@ -4,6 +4,7 @@
     <TargetFramework>net48</TargetFramework>
     <AssemblyName>QuasimorphCoop</AssemblyName>
     <RootNamespace>QuasimorphCoop</RootNamespace>
+    <Version>0.2.0</Version>
     <LangVersion>latest</LangVersion>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
@@ -27,7 +28,9 @@
     <Reference Include="0Harmony" HintPath="$(QuasimorphManaged)/0Harmony.dll" Private="false" />
     <Reference Include="UnityEngine" HintPath="$(QuasimorphManaged)/UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(QuasimorphManaged)/UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.InputLegacyModule" HintPath="$(QuasimorphManaged)/UnityEngine.InputLegacyModule.dll" Private="false" />
     <Reference Include="netstandard" HintPath="$(QuasimorphManaged)/netstandard.dll" Private="false" />
+    <Reference Include="com.rlabrecque.steamworks.net" HintPath="$(QuasimorphManaged)/com.rlabrecque.steamworks.net.dll" Private="false" />
   </ItemGroup>
 
   <ItemGroup>

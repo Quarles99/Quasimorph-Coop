@@ -8,13 +8,20 @@ namespace QuasimorphCoop.Lockstep
     // one global UnityEngine.Random for gameplay and for visuals/audio, and the visual side draws a
     // frame-rate-dependent amount. When enabled, the simulation entry points below run on their own
     // saved Random.state and everything else (rendering, UI, sound) runs on a separate one.
+    //
+    // SimDepth is tracked even when disabled: "inside the simulation" vs "player input / UI" is how
+    // the netcode decides which actions to send to the other machine.
     internal static class GameplayRng
     {
         public static bool Enabled;
 
+        public static int SimDepth { get; private set; }
+
+        public static bool InSimulation => SimDepth > 0;
+
         private static UnityEngine.Random.State _gameplay;
         private static UnityEngine.Random.State _outside;
-        private static int _depth;
+        private static bool _swapped;
 
         public static void Reset(int seed)
         {
@@ -22,34 +29,31 @@ namespace QuasimorphCoop.Lockstep
             UnityEngine.Random.InitState(seed);
             _gameplay = UnityEngine.Random.state;
             UnityEngine.Random.state = saved;
-            _depth = 0;
         }
 
-        public static UnityEngine.Random.State GameplayState => _depth > 0 || !Enabled ? UnityEngine.Random.state : _gameplay;
+        public static UnityEngine.Random.State GameplayState => _swapped || !Enabled ? UnityEngine.Random.state : _gameplay;
 
         public static void Enter()
         {
-            if (!Enabled)
-            {
-                return;
-            }
-            if (_depth++ == 0)
+            if (SimDepth++ == 0 && Enabled)
             {
                 _outside = UnityEngine.Random.state;
                 UnityEngine.Random.state = _gameplay;
+                _swapped = true;
             }
         }
 
         public static void Exit()
         {
-            if (!Enabled || _depth == 0)
+            if (SimDepth == 0)
             {
                 return;
             }
-            if (--_depth == 0)
+            if (--SimDepth == 0 && _swapped)
             {
                 _gameplay = UnityEngine.Random.state;
                 UnityEngine.Random.state = _outside;
+                _swapped = false;
             }
         }
     }
