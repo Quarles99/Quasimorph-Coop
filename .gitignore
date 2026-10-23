@@ -6,3 +6,4 @@ obj/
 # Never commit game binaries or decompiled game code
 *.dll
 decompiled/
+dist/

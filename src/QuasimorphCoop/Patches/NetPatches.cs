@@ -146,4 +146,19 @@ namespace QuasimorphCoop.Patches
 
         private static Exception Finalizer(Exception __exception, bool __state) => DirectActionPatch.End(__exception, __state);
     }
+
+    // Picking up items and looting corpses go through inventory UI that isn't synced yet.
+    [HarmonyPatch(typeof(PlayerInteractionSystem), nameof(PlayerInteractionSystem.TakeItemOrLootCorpse))]
+    internal static class LootNetPatch
+    {
+        private static bool Prefix()
+        {
+            if (NetSession.Engaged && !NetSession.Replaying)
+            {
+                NetSession.Notify("Co-op: picking up and looting aren't synced yet.");
+                return false;
+            }
+            return true;
+        }
+    }
 }

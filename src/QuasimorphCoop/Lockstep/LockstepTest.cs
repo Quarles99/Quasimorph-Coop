@@ -90,10 +90,47 @@ namespace QuasimorphCoop.Lockstep
 
         public static void OnDungeonStarted()
         {
-            if (_instance != null && !_instance._running)
+            if (_instance == null)
+            {
+                return;
+            }
+            if (_instance._selftestStage == 1)
+            {
+                _instance.FinishSelftest();
+            }
+            else if (!_instance._running)
             {
                 _instance.Begin();
             }
+        }
+
+        // selftest=same|copy: the session-start path without Steam. With a 2-merc party, save, then
+        // reload either the same slot (what the host does) or a copy of its files in slot 9 (what the
+        // client gets). Both must come back with the same 2-merc party and state.
+        private int _selftestStage;
+
+        private void StartSelftest(State state, string variant)
+        {
+            int slot = state.Get<SavedGameMetadata>().Slot;
+            state.Get<SaveManager>().SaveGame();
+            int target = slot;
+            if (variant == "copy")
+            {
+                target = Net.SlotFiles.ClientSlot;
+                Net.SlotFiles.Write(target, Net.SlotFiles.Read(slot));
+            }
+            Append($"selftest {variant}: saved slot {slot} with party {CoopSession.Party.Count}; "
+                + $"before {StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber)}; reloading slot {target}");
+            _selftestStage = 1;
+            StartCoroutine(Net.NetSession.ReloadSlot(target));
+        }
+
+        private void FinishSelftest()
+        {
+            State state = CoopSession.State;
+            Append($"selftest after: party {CoopSession.Party.Count} {StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber)}");
+            _selftestStage = 2;
+            Finish(CoopSession.Party.Count == 2 ? "DONE selftest party restored" : $"FAIL selftest party {CoopSession.Party.Count}");
         }
 
         private void Begin()
@@ -107,6 +144,13 @@ namespace QuasimorphCoop.Lockstep
                 {
                     CoopSession.AddMerc(second, pos);
                 }
+            }
+
+            string selftest = Get("selftest", "");
+            if (selftest.Length > 0)
+            {
+                StartSelftest(state, selftest);
+                return;
             }
 
             int seed = int.Parse(Get("seed", "424242"), CultureInfo.InvariantCulture);

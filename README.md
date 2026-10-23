@@ -2,7 +2,7 @@
 
 An experimental mod that adds a second player-controlled merc to Quasimorph missions, with the goal of eventual online co-op.
 
-**Status: milestone 1 (local hotseat).** Two full mercs (class, perks, implants, wounds, inventory) share one mission on one PC and take turns. There's no networking yet.
+**Status: milestone 2 (online, first pass).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Online play is new and has only been tested on one machine so far (see "Testing" below).
 
 ## How it works
 
@@ -41,6 +41,27 @@ Everything the mod does is logged to `Player.log` with the prefix `[QMCoop]`:
 ```sh
 grep QMCoop ~/.local/share/Steam/steamapps/compatdata/2059170/pfx/drive_c/users/steamuser/AppData/LocalLow/Magnum\ Scriptum\ Ltd/Quasimorph/Player.log
 ```
+
+## Playing online (milestone 2)
+
+Both players need the **same game version and the exact same mod build**. The host checks a hash of the DLL and refuses a mismatch. Use the same set of other mods too; a different mod list only gives a warning, but it can cause desyncs.
+
+**Install for the friend (Windows):** unzip `QuasimorphCoop.zip` into
+`%USERPROFILE%\AppData\LocalLow\Magnum Scriptum Ltd\Quasimorph\LocalUserPresets\`
+so that you get `...\LocalUserPresets\QuasimorphCoop\QuasimorphCoop.dll`. Start the game once and check that the mod is listed.
+
+**Starting a session:**
+1. Host: start a mission. Open the console (`` ` ``) and run `coop_add <index>` to add the merc your friend will play.
+2. Host: run `coop_host`. A friends-only lobby is created and the Steam invite dialog opens. The lobby id is also shown.
+3. Friend: **be on the main menu** and accept the invite. If the overlay invite doesn't work, the friend can open the console on the main menu and run `coop_join <lobbyid>` instead.
+4. The host's game saves and sends the save (about 1.3 MB). Both games load it; the friend's copy goes into hidden slot 9, so their own saves aren't touched. Then you get "Co-op started".
+5. The host controls the first merc and the friend controls the second. During the other player's turn your input is blocked and you watch their merc.
+
+`coop_net` shows the session state. `coop_leave` ends the session; the mission continues as local hotseat.
+
+**What's synced:** moving, shooting, reload key, swapping weapons and fire modes, movement speed, skip turn, facing, doors, ultimate perks. After every action point both games compare a fingerprint of the state (positions, facing, HP, inventory counts, weapon). If they ever differ, both get a "went out of sync" message and the details go to `Player.log`.
+
+**Not synced yet:** picking up items and looting (blocked during a session), inventory and health screens (using them causes a desync), reloading with a chosen ammo type (blocked), and changing floors or ending the mission (the session ends; host again on the new floor). The friend plays in a copy of the host's world, so nothing carries back to the friend's own save yet.
 
 ## Known limitations (milestone 1)
 

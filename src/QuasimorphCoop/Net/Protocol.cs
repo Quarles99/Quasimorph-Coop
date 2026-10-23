@@ -18,7 +18,8 @@ namespace QuasimorphCoop.Net
         Go,             // host -> client: gameplay RNG seed, start lockstep
         Batch,          // either: player actions for the sender's merc
         Hash,           // either: state fingerprint after an action point
-        Bye             // either: leaving the session
+        Bye,            // either: leaving the session
+        Ping            // either: keepalive
     }
 
     // Actions that bypass PlayerCommandQueue and are called directly from input handling.

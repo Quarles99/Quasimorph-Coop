@@ -213,6 +213,7 @@ namespace QuasimorphCoop.Net
                     case MsgType.Batch: _inbox.Enqueue(new Batch { ApSeq = r.ReadInt32(), Payload = r.ReadBytes(data.Length - 5) }); break;
                     case MsgType.Hash: OnRemoteHash(r.ReadInt32(), r.ReadString(), r.ReadString()); break;
                     case MsgType.Bye: Stop($"{SteamNet.Instance.PeerName} left: {r.ReadString()}"); break;
+                    case MsgType.Ping: break;
                 }
             }
         }
@@ -250,40 +251,64 @@ namespace QuasimorphCoop.Net
             State state = CoopSession.State;
             state.Get<SaveManager>().SaveGame();
             int slot = state.Get<SavedGameMetadata>().Slot;
-            Dictionary<string, byte[]> files = SlotFiles.Read(slot);
-            int bytes = 0;
+            _phase = Phase.Loading;
+            _hostLoaded = _clientReady = false;
+            SteamNet.Instance.StartCoroutine(SendWorldThenReload(slot, SlotFiles.Read(slot)));
+        }
+
+        // Steam's per-connection send buffer is smaller than a save (~1.3 MB), so send one chunk per
+        // frame and back off while the buffer is full. Abort (without reloading) if it never drains.
+        private static IEnumerator SendWorldThenReload(int slot, Dictionary<string, byte[]> files)
+        {
+            List<byte[]> chunks = new List<byte[]>();
             foreach (KeyValuePair<string, byte[]> file in files)
             {
                 int total = Math.Max(1, (file.Value.Length + SteamNet.MaxChunkBytes - 1) / SteamNet.MaxChunkBytes);
                 for (int i = 0; i < total; i++)
                 {
-                    int offset = i * SteamNet.MaxChunkBytes;
+                    int index = i, offset = i * SteamNet.MaxChunkBytes;
                     int length = Math.Min(SteamNet.MaxChunkBytes, file.Value.Length - offset);
-                    SteamNet.Instance.Send(Wire.Build(MsgType.FileChunk, w =>
+                    chunks.Add(Wire.Build(MsgType.FileChunk, w =>
                     {
                         w.Write(file.Key);
-                        w.Write(i);
+                        w.Write(index);
                         w.Write(total);
                         w.Write(length);
                         w.Write(file.Value, offset, length);
                     }));
                 }
-                bytes += file.Value.Length;
             }
             _seed = Environment.TickCount;
-            SteamNet.Instance.Send(Wire.Build(MsgType.FilesDone, w =>
+            chunks.Add(Wire.Build(MsgType.FilesDone, w =>
             {
                 w.Write(files.Count);
                 w.Write(_seed);
             }));
-            Log.Info($"Sent {files.Count} files ({bytes} bytes) from slot {slot}; reloading it.");
-            _phase = Phase.Loading;
-            _hostLoaded = _clientReady = false;
+
+            foreach (byte[] chunk in chunks)
+            {
+                int attempts = 0;
+                while (!SteamNet.Instance.Send(chunk))
+                {
+                    if (_phase != Phase.Loading)
+                    {
+                        yield break;
+                    }
+                    if (++attempts > 600)
+                    {
+                        Leave("couldn't send the save to your friend");
+                        yield break;
+                    }
+                    yield return new WaitForSecondsRealtime(0.05f);
+                }
+                yield return null;
+            }
+            Log.Info($"Sent {files.Count} files ({files.Values.Sum(f => f.Length)} bytes, {chunks.Count} messages) from slot {slot}; reloading it.");
             SteamNet.Instance.StartCoroutine(ReloadSlot(slot));
         }
 
         // Same as the game's LoadLastSave, but from the regular (non-auto) save.
-        private static IEnumerator ReloadSlot(int slot)
+        internal static IEnumerator ReloadSlot(int slot)
         {
             GameModeStateMachine machine = UnityEngine.Object.FindObjectOfType<GameModeStateMachine>();
             AccessTools.Method(typeof(GameModeStateMachine), "KillDungeon").Invoke(machine, Array.Empty<object>());

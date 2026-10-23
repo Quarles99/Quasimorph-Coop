@@ -37,6 +37,13 @@ namespace QuasimorphCoop.Lockstep
                     .Append('d').Append(((int)d.LookDirection).ToString(CultureInfo.InvariantCulture))
                     .Append('h').Append(d.Health.Value.ToString(CultureInfo.InvariantCulture))
                     .Append(d.Health.Alive ? "" : "x");
+                // Inventory changes made in UI screens aren't synced yet; make them show up as a desync.
+                if (c is Player && d.Inventory != null)
+                {
+                    sb.Append('i').Append(d.Inventory.BackpackStore?.Items.Count.ToString(CultureInfo.InvariantCulture) ?? "-")
+                        .Append('/').Append(d.Inventory.VestStore?.Items.Count.ToString(CultureInfo.InvariantCulture) ?? "-")
+                        .Append('w').Append(d.Inventory.CurrentWeapon?.Id ?? "-");
+                }
             }
             return sb.ToString();
         }

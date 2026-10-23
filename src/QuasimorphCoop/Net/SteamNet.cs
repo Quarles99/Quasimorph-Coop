@@ -13,7 +13,7 @@ namespace QuasimorphCoop.Net
         private const int Channel = 0;
         private const int MaxMessagesPerFrame = 64;
         // Steam's reliable message limit is 512 KB; stay well under it for file chunks.
-        public const int MaxChunkBytes = 256 * 1024;
+        public const int MaxChunkBytes = 128 * 1024;
 
         public static SteamNet Instance { get; private set; }
 
@@ -32,6 +32,8 @@ namespace QuasimorphCoop.Net
         private CallResult<LobbyCreated_t> _lobbyCreated;
         private readonly IntPtr[] _messages = new IntPtr[MaxMessagesPerFrame];
         private bool _callbacksReady;
+        private float _lastSend;
+        private CSteamID _pendingLobby = CSteamID.Nil;
 
         public static void Ensure()
         {
@@ -66,8 +68,19 @@ namespace QuasimorphCoop.Net
             int i = Array.IndexOf(args, "+connect_lobby");
             if (i >= 0 && i + 1 < args.Length && ulong.TryParse(args[i + 1], out ulong lobbyId))
             {
-                Log.Info($"Launched with +connect_lobby {lobbyId}.");
-                JoinLobby(new CSteamID(lobbyId));
+                // The main menu doesn't exist yet this early; join once it does.
+                Log.Info($"Launched with +connect_lobby {lobbyId}; joining at the main menu.");
+                _pendingLobby = new CSteamID(lobbyId);
+            }
+        }
+
+        public void JoinPendingLobby()
+        {
+            if (_pendingLobby != CSteamID.Nil)
+            {
+                CSteamID lobby = _pendingLobby;
+                _pendingLobby = CSteamID.Nil;
+                JoinLobby(lobby);
             }
         }
 
@@ -113,12 +126,17 @@ namespace QuasimorphCoop.Net
             {
                 EResult result = SteamNetworkingMessages.SendMessageToUser(ref id, handle.AddrOfPinnedObject(), (uint)data.Length,
                     Constants.k_nSteamNetworkingSend_Reliable, Channel);
-                if (result != EResult.k_EResultOK)
+                if (result == EResult.k_EResultOK)
+                {
+                    _lastSend = Time.realtimeSinceStartup;
+                    return true;
+                }
+                // LimitExceeded just means the send buffer is full; callers retry.
+                if (result != EResult.k_EResultLimitExceeded)
                 {
                     Log.Warn($"Send of {data.Length} bytes failed: {result}.");
-                    return false;
                 }
-                return true;
+                return false;
             }
             finally
             {
@@ -165,7 +183,16 @@ namespace QuasimorphCoop.Net
                     SteamNetworkingMessage_t.Release(_messages[i]);
                 }
             }
+            if (_pendingLobby != CSteamID.Nil && FindObjectOfType<MGSC.MainMenuGameMode>() != null)
+            {
+                JoinPendingLobby();
+            }
             NetSession.Update();
+            // Keep the session from idling out while someone sits in a menu.
+            if (HasPeer && NetSession.Engaged && Time.realtimeSinceStartup - _lastSend > 10f)
+            {
+                Send(Wire.Build(MsgType.Ping));
+            }
         }
 
         private void LateUpdate()
@@ -184,6 +211,7 @@ namespace QuasimorphCoop.Net
             Lobby = new CSteamID(result.m_ulSteamIDLobby);
             SteamMatchmaking.SetLobbyData(Lobby, "qmcoop", NetSession.ProtocolVersion);
             Log.Info($"Lobby {Lobby} created; opening invite dialog.");
+            NetSession.Notify($"Co-op lobby {Lobby.m_SteamID} created. Invite a friend, or they can run: coop_join {Lobby.m_SteamID}");
             SteamFriends.ActivateGameOverlayInviteDialog(Lobby);
         }
 
