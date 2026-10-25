@@ -20,7 +20,9 @@ Your friend's merc joins you at every mission start and floor change. You contro
 [*]Leaving by shuttle, ladders and elevators (the whole party goes)
 [*]Shared vision: the map shows what either merc sees
 [*]If one merc dies the other carries on, and you can loot the fallen
-[*]Between missions your friend equips their own merc on your ship
+[*]Treat your partner: stand next to them, open [b]Co-op[/b] and click [b]Treat[/b] to use your own medkits and splints on their wounds
+[*]Hand items over: with your partner next to you, their backpack shows up as an extra tab in your inventory
+[*]Between missions your friend equips their own merc on your ship, picks which merc they play, and presses Start to tell you they're ready (and which mission they'd pick)
 [/list]
 Both games check they're in sync after every action. If they ever differ, they resync automatically within a few seconds.
 
@@ -28,7 +30,9 @@ Both games check they're in sync after every action. If they ever differ, they r
 [list]
 [*]Twice the enemies by default when playing with a partner, to balance the second merc. Change it with [b]Enemies[/b] in the Co-op menu (x1, x1.5 or x2).
 [*]It's the host's campaign. The friend plays in a hidden copy (slot 9), so their own saves are never touched.
-[*]Only the host starts missions and manages the ship (trading, crew, crafting); the friend manages their own merc's gear.
+[*]Only the host starts missions and manages the ship (trading, crew, crafting); the friend manages their own merc's gear. If the friend hasn't pressed Start yet, the host gets a warning first.
+[*][b]Hold partner[/b] (Co-op menu): the partner stays on the map but passes every turn, so you can play on alone for a while. If your friend disconnects mid-mission, their merc is held automatically; it's released when they join again.
+[*]Changing the partner mid-mission takes effect on the next floor; the old partner goes back to the ship as if they'd extracted.
 [*]Hotseat without going online: pick a Partner in the Co-op menu and both mercs take turns on one PC.
 [/list]
 

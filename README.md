@@ -2,7 +2,7 @@
 
 An experimental mod that adds a second player-controlled merc to Quasimorph missions, with the goal of eventual online co-op.
 
-**Status: milestone 3 (online, inventory and ship).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Between missions the friend equips their own merc on the host's ship. Online play has only been tested on one machine so far (recorded and replayed sessions, plus selftests).
+**Status: milestone 4 (closing feature gaps with other multiplayer mods; see [docs/plan.md](docs/plan.md)).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Mercs can treat each other and hand items over, and the partner can be put on hold. Between missions the friend equips their own merc on the host's ship, picks which merc they play, and readies up. Online play has only been tested on one machine so far (recorded and replayed sessions, plus selftests).
 
 ## How it works
 
@@ -25,6 +25,8 @@ dotnet build src/QuasimorphCoop -c Release -p:Deploy=true
 
 `Deploy=true` copies the mod to the game's local mod folder:
 `<persistentDataPath>/LocalUserPresets/QuasimorphCoop/`. Defaults assume Steam on Linux with Proton. Override `QuasimorphDir` and/or `QuasimorphUserData` for other setups.
+
+`tools/run_lockstep.sh <run> key=value...` runs the built-in test harness (a bot plays a mission, optionally recording its inputs and replaying them at another frame rate; see `Lockstep/LockstepTest.cs` for the options). With `QM_HEADLESS=1` it starts the game through Proton inside a headless `gamescope` with its sound muted, so test runs don't open a window or take focus. Steam must be running.
 
 ## Local hotseat with console commands
 
@@ -71,7 +73,11 @@ After every action point both games compare a fingerprint of the state (position
 
 **Between levels:** the next level loads by itself when the host starts it. The friend plays in a copy of the host's campaign (hidden slot 9), so nothing carries back to the friend's own saves. That's by design: it's the host's campaign.
 
-**On the ship:** when the mission ends (or if the friend joins while the host is on the ship), the friend's game shows a copy of the host's ship. The friend can equip their own merc there: open the merc's **Equipment** screen, take gear from the ship cargo, put gear back. When they close the screen, the change goes to the host's game, which applies it to the real ship and tells the host. It's refused (and the friend's copy shows the real ship again) if the host moved items in one of the same cargo tabs meanwhile; the friend then just redoes it. Everything else on the ship (missions, crew, trading, crafting, recycling) is the host's: changes the friend makes to anything but their own merc's gear aren't kept, and only the host can start missions. If the host presses Start while the friend is still in the Equipment screen, the host gets a warning first.
+**On the ship:** when the mission ends (or if the friend joins while the host is on the ship), the friend's game shows a copy of the host's ship. The friend can equip their own merc there: open the merc's **Equipment** screen, take gear from the ship cargo, put gear back. When they close the screen, the change goes to the host's game, which applies it to the real ship and tells the host. It's refused (and the friend's copy shows the real ship again) if the host moved items in one of the same cargo tabs meanwhile; the friend then just redoes it. Everything else on the ship (missions, crew, trading, crafting, recycling) is the host's: changes the friend makes to anything but their own merc's gear aren't kept, and only the host can start missions.
+
+The friend's **Start** button means "I'm ready": the host is told, along with the mission or station the friend had open as a suggestion. If the host presses Start while the friend isn't ready yet, or is still in the Equipment screen, the host gets a warning first; pressing Start again goes anyway.
+
+The friend picks their own merc on the ship: in their **Co-op** menu, **Your merc** asks the host's game for the next free roster merc, and the host's game switches the partner if that merc is available. When the host changes the partner on the ship, the friend's game follows.
 
 ## How the party behaves
 
@@ -80,6 +86,10 @@ After every action point both games compare a fingerprint of the state (position
 - **Saves.** The dungeon save has room for only one player, so the other party merc goes into a small file next to each dungeon save (`[autosave_]slot_N_coop_<location>.dat`). The merc respawns when you reload and follows you to the next floor. Only roster mercs come back; `coop_add temp` mercs are dropped.
 - **More enemies.** With a partner, levels get twice the enemies by default: the game's points budget for random enemy groups (and for most reinforcements during a mission) is doubled. Allied groups, quest groups and hand-placed story enemies stay as they are. Change it with **Enemies** in the Co-op menu (x1, x1.5 or x2); it's saved per save slot and applies from the next level. It can't be changed while online.
 - **Enemies treat each merc on its own.** An invisible merc is hidden from enemies while a visible partner isn't, and curse effects on a merc (wound and infection chances, seizing shots, chaos damage) use that merc's own curse.
+- **Hold partner.** **Hold partner** in the Co-op menu keeps the partner on the map (enemies can still go for them) but has them pass every turn, so you can play on alone for a while. Online only the host can toggle it. If the friend disconnects mid-mission, their merc is held instead of becoming yours to play; turn the hold off to play them yourself. It's released automatically when the friend joins again, and the last living merc is never held.
+- **Treating each other.** With a party merc next to you, the Co-op menu shows **Treat <name>** on your turn. It opens the usual health screen for that merc, with your own medkits and splints, and treating ends your turn as usual.
+- **Handing items over.** With a party merc next to you, their backpack appears as an extra tab in your inventory; drag items across.
+- **Changing the partner mid-mission** takes effect on the next floor. The old partner goes back to the ship the same way as an extraction, and the new one joins next to you.
 - **Gear sticks immediately.** The partner's gear and wounds live on their roster entry, so changes stick even if they don't extract, as long as they're alive.
 
 ## Publishing to the Steam Workshop
@@ -96,8 +106,8 @@ The game loads Workshop mods first and drops a later mod with the same name, so 
 
 ## Known limitations
 
-- **Untested between two real PCs.** Everything online has been tested with recorded-and-replayed sessions on one machine and with selftests, not yet with a friend. That includes the ship: the host's side of a gear change is tested, the friend's screens and the Steam transfer are not.
-- **Rare desync.** In one recent test session the two copies of a fight came out differently (an enemy shot killed a merc in one and not the other). A rerun with the same settings didn't repeat it. Auto-resync recovers from it.
+- **Untested between two real PCs.** Everything online has been tested with recorded-and-replayed sessions on one machine and with selftests, not yet with a friend. That includes the ship: the host's side of a gear change is tested, the friend's screens, Ready and merc picking, and the Steam transfer are not. Holding the friend's merc on disconnect, the Treat menu click and dragging into the partner's backpack tab are also only covered by the code paths the test bot calls.
+- **Desyncs.** Burst fire used to resolve differently at different frame rates (shots were spaced in game time, bullets moved per frame); both now count the same ticks, and 30fps recordings replay identically at 120fps. Since then bursts fire proportionally faster on screen above 30fps, the same way bullets already flew. If another desync turns up, auto-resync recovers from it.
 - **Ship: only the friend's merc's gear.** The rest of the ship is the host's (see above).
 - **Synced but not yet exercised by a test:** workbench crafting, the shuttle's ship-cargo and shuttle-cargo tabs (the test map has neither a workbench nor a shuttle), closing a station menu on the watching player's screen, and joining while the host is on the ship.
 - **Minor enemy details.** The "enemy nearby" signal through walls and the more precise enemy pathfinding near the player use the merc whose turn it is. Neither changes who enemies see or shoot.
