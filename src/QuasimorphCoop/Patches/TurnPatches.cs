@@ -19,4 +19,13 @@ namespace QuasimorphCoop.Patches
 
         private static void Postfix(Player __instance) => Net.NetSession.OnActionPointStarted(__instance);
     }
+
+    // A held merc passes its action point the way a player's skip would: from DungeonGameMode.Update
+    // once the merc is idle. Ending it inside ProcessActionPoint instead lets TurnController.Tick run
+    // the next creature in the same frame or not, depending on animations, i.e. on frame rate.
+    [HarmonyPatch(typeof(DungeonGameMode), "Update")]
+    internal static class HoldSkipPatch
+    {
+        private static void Prefix() => Hold.Update();
+    }
 }

@@ -44,6 +44,8 @@ namespace QuasimorphCoop.Lockstep
         private int _exitAt;
         private int _abortAt;
         private bool _exitPressed;
+        private int _holdAt;
+        private int _releaseAt;
 
         public static bool Active => _instance != null;
 
@@ -259,6 +261,10 @@ namespace QuasimorphCoop.Lockstep
             }
             _exitAt = int.Parse(Get("exitat", "0"), CultureInfo.InvariantCulture);
             _abortAt = int.Parse(Get("abortat", "0"), CultureInfo.InvariantCulture);
+            // hold=N-M: hold the partner from player action point N, release it at M (0 = never).
+            string[] hold = Get("hold", "0-0").Split('-');
+            _holdAt = int.Parse(hold[0], CultureInfo.InvariantCulture);
+            _releaseAt = hold.Length > 1 ? int.Parse(hold[1], CultureInfo.InvariantCulture) : 0;
             FinishGameProbe.Reason = null;
             Append($"stations {StationBot.Inventory(state)}");
 
@@ -465,6 +471,20 @@ namespace QuasimorphCoop.Lockstep
                 return;
             }
             Player player = creatures.Player;
+            if (Hold.IsHeld(player))
+            {
+                return;
+            }
+            if (_holdAt > 0 && _playerAps >= _holdAt)
+            {
+                _holdAt = 0;
+                Append($"bot hold: {Net.NetSession.RequestHold(true)}");
+            }
+            if (_releaseAt > 0 && _playerAps >= _releaseAt)
+            {
+                _releaseAt = 0;
+                Append($"bot release: {Net.NetSession.RequestHold(false)}");
+            }
             if (_inventoryBot != null && _inventoryDoneAt != _apSeq && _playerAps % _inventoryEvery == 0)
             {
                 _inventoryDoneAt = _apSeq;

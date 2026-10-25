@@ -79,10 +79,14 @@ namespace QuasimorphCoop.Patches
 
     // Mission results (extraction, death, abort) are computed from Creatures.Player and MercenaryInRaid,
     // so collapse to the primary merc first. FinishGame then saves (exit to menu, next floor) with the
-    // party already collapsed, so snapshot it for those saves; on a floor change carry it over.
+    // party already collapsed, so snapshot it for those saves; on a floor change carry over only the
+    // current partner. A merc that was swapped out or dropped mid-mission goes back to the ship here,
+    // like an extraction, and Partner.AutoAdd brings in the new pick on the next floor.
     [HarmonyPatch(typeof(DungeonGameMode), "FinishGame")]
     internal static class DungeonGameModeFinishGamePatch
     {
+        private static readonly AccessTools.FieldRef<DungeonGameMode, State> StateRef = AccessTools.FieldRefAccess<DungeonGameMode, State>("_state");
+
         private static void Prefix()
         {
             if (CoopSession.Active)
@@ -93,7 +97,7 @@ namespace QuasimorphCoop.Patches
             }
         }
 
-        private static void Postfix(DungeonFinishedData dungeonFinishedData)
+        private static void Postfix(DungeonGameMode __instance, DungeonFinishedData dungeonFinishedData)
         {
             if (PartyPersistence.FinishSnapshot == null)
             {
@@ -101,10 +105,14 @@ namespace QuasimorphCoop.Patches
             }
             if (dungeonFinishedData.Reason == GameFinishedReason.MoveNextLocation && PartyPersistence.FinishSnapshot.Count > 0)
             {
+                string partner = Partner.Get(StateRef(__instance));
                 PartyPersistence.Pending = PartyPersistence.FinishSnapshot
-                    .Select(e => new PartyPersistence.Entry { ProfileId = e.ProfileId })
+                    .Where(e => e.ProfileId == partner)
+                    .Select(e => new PartyPersistence.Entry { ProfileId = e.ProfileId, Held = e.Held })
                     .ToList();
-                Log.Info($"Next floor: carrying over {PartyPersistence.Pending.Count} party merc(s).");
+                int dropped = PartyPersistence.FinishSnapshot.Count - PartyPersistence.Pending.Count;
+                Log.Info($"Next floor: carrying over {PartyPersistence.Pending.Count} party merc(s)"
+                    + (dropped > 0 ? $"; {dropped} not the current partner ('{partner ?? "none"}'), back to the ship." : "."));
             }
             PartyPersistence.FinishSnapshot = null;
         }

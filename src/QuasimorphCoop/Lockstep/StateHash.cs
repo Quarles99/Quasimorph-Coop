@@ -36,7 +36,8 @@ namespace QuasimorphCoop.Lockstep
                     .Append(',').Append(d.Position.Y.ToString(CultureInfo.InvariantCulture))
                     .Append('d').Append(((int)d.LookDirection).ToString(CultureInfo.InvariantCulture))
                     .Append('h').Append(d.Health.Value.ToString(CultureInfo.InvariantCulture))
-                    .Append(d.Health.Alive ? "" : "x");
+                    .Append(d.Health.Alive ? "" : "x")
+                    .Append(c is Player held && Hold.IsHeld(held) ? "H" : "");
                 if (c is Player && d.Inventory != null)
                 {
                     sb.Append('i').Append(InventoryDigest(d.Inventory)).Append('w').Append((int)d.Inventory.CurrentSlotType);

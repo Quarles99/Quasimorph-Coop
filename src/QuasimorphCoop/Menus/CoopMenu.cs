@@ -175,6 +175,18 @@ namespace QuasimorphCoop.Menus
                     Enabled = !NetSession.Engaged,
                     OnClick = () => CyclePartner(state)
                 });
+                // Online that's the friend's merc on both machines (party merc 1, the host's partner).
+                Player target = Hold.Target(CoopSession.State);
+                if (target != null)
+                {
+                    bool isHeld = Hold.IsHeld(target);
+                    entries.Add(new Entry
+                    {
+                        Label = "Hold partner: " + (isHeld ? "on" : "off"),
+                        Enabled = !NetSession.Engaged || NetSession.IsHost,
+                        OnClick = () => NetSession.Notify("Co-op: " + NetSession.RequestHold(!isHeld))
+                    });
+                }
                 entries.Add(new Entry
                 {
                     Label = "Enemies: " + EnemyScaling.Label(EnemyScaling.Get(state)),

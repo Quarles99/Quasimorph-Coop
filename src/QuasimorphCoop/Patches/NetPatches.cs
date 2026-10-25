@@ -45,7 +45,15 @@ namespace QuasimorphCoop.Patches
     // Direct actions: called straight from input handling instead of going through the queue.
     internal static class DirectActionPatch
     {
-        public static bool Begin(DirectAction action, int arg, out bool recorded) => NetSession.BeginAction(action, arg, out recorded);
+        public static bool Begin(DirectAction action, int arg, out bool recorded)
+        {
+            if (Hold.Skipping)
+            {
+                recorded = false;
+                return true;
+            }
+            return NetSession.BeginAction(action, arg, out recorded);
+        }
 
         public static Exception End(Exception exception, bool recorded)
         {

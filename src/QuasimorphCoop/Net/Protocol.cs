@@ -35,7 +35,8 @@ namespace QuasimorphCoop.Net
         SwapFiremode,
         Reload,
         ActivateUltimate,
-        ChangeDirection
+        ChangeDirection,
+        Hold            // host's Co-op menu: Arg 1 holds the friend's merc, 0 releases it
     }
 
     // One recorded player input: a queued ICommand, a direct action, or an inventory op.

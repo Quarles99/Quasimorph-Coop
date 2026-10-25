@@ -37,6 +37,7 @@ namespace QuasimorphCoop
         {
             State = state;
             _party.Clear();
+            Hold.Clear();
             Player primary = state.Get<Creatures>().Player;
             if (primary != null)
             {

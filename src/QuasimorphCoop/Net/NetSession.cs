@@ -27,7 +27,7 @@ namespace QuasimorphCoop.Net
     //    exchange a state hash to catch desyncs.
     internal static partial class NetSession
     {
-        public const string ProtocolVersion = "4";
+        public const string ProtocolVersion = "5";
 
         private enum Role { None, Host, Client }
 
@@ -115,6 +115,9 @@ namespace QuasimorphCoop.Net
         // The friend plays this merc (the host's chosen partner); the host plays the rest of the party.
         // Decided by the host for every level sync, so it doesn't depend on party order.
         private static string _friendMercId;
+
+        // Host's Hold toggle waiting for the host's merc to be up (it's recorded on that action point).
+        private static bool? _pendingHold;
 
         private static string ModHash
         {
@@ -226,9 +229,16 @@ namespace QuasimorphCoop.Net
         {
             Log.Warn($"Session ended ({reason}) at {Status}.");
             Notify("Co-op ended: " + reason);
+            _pendingHold = null;
             StopLockstep();
+            Loopback loopback = _loopback;
             _loopback = Loopback.None;
             _phase = Phase.Idle;
+            // After going offline, so a friend's merc that's up right now passes this action point too.
+            if (loopback == Loopback.None)
+            {
+                HoldFriendMercOnStop();
+            }
             _role = Role.None;
             _incoming.Clear();
             _pendingWorld = null;
@@ -239,6 +249,67 @@ namespace QuasimorphCoop.Net
             _friendEditing = _editingOwnMerc = false;
             _pendingShip = null;
             SteamNet.Instance?.Leave();
+        }
+
+        // Without the friend their merc would quietly become yours to play (hotseat). Hold it
+        // instead; the Co-op menu's Hold button hands it to you.
+        private static void HoldFriendMercOnStop()
+        {
+            if (_role != Role.Host || !CoopSession.Active)
+            {
+                return;
+            }
+            Player friend = CoopSession.Party.FirstOrDefault(p => p.Mercenary?.ProfileId == _friendMercId);
+            if (friend == null || !friend.CreatureData.Health.Alive || Hold.IsHeld(friend))
+            {
+                return;
+            }
+            Hold.Set(_friendMercId, true);
+            Notify($"Co-op: {CoopSession.DisplayName(friend.Mercenary)} is on hold. To play them yourself, use \"Hold partner\" in the Co-op menu.");
+        }
+
+        // Co-op menu: hold or release the partner. Offline it applies right away; online only the host
+        // can, and it's sent as an input on the host's merc's next action point so both games apply it
+        // at the same point. Returns a message for the player.
+        public static string RequestHold(bool held)
+        {
+            if (!Engaged)
+            {
+                Player target = Hold.Target(CoopSession.State);
+                if (target == null)
+                {
+                    return "no partner on the map.";
+                }
+                Hold.Set(target.Mercenary.ProfileId, held);
+                return held ? $"{CoopSession.DisplayName(target.Mercenary)} passes their turns until released." : $"{CoopSession.DisplayName(target.Mercenary)} is back in play.";
+            }
+            if (_role != Role.Host)
+            {
+                return $"only {SteamNet.Instance?.PeerName ?? "the host"} can hold or release your merc.";
+            }
+            if (!Running)
+            {
+                return "wait until the level has synced.";
+            }
+            if (!CoopSession.Party.Any(p => IsLocal(p) && p.CreatureData.Health.Alive))
+            {
+                return "your merc is down, so your friend keeps playing.";
+            }
+            _pendingHold = held;
+            return LocalWaiting() ? (held ? "holding your friend's merc." : "releasing your friend's merc.")
+                : (held ? "your friend's merc is held from your next turn." : "your friend's merc is released from your next turn.");
+        }
+
+        private static void SendPendingHold()
+        {
+            if (_pendingHold == null || !Running || !LocalWaiting())
+            {
+                return;
+            }
+            bool held = _pendingHold.Value;
+            _pendingHold = null;
+            Record(new NetEntry { Action = DirectAction.Hold, Arg = held ? 1 : 0 });
+            Hold.Set(_friendMercId, held);
         }
 
         private static void StopLockstep()
@@ -307,6 +378,11 @@ namespace QuasimorphCoop.Net
             SteamNet.Instance.Send(Wire.Build(MsgType.Welcome));
             _phase = Phase.Connected;
             Notify($"Co-op: {SteamNet.Instance.PeerName} joined.");
+            if (Hold.Any)
+            {
+                Hold.Clear();
+                Notify("Co-op: your partner is no longer held.");
+            }
             HostSyncIfPossible();
         }
 
@@ -641,6 +717,8 @@ namespace QuasimorphCoop.Net
             _loopback = mode;
             _loopbackFile = file;
             _role = Role.Host;
+            // Nobody to give it to, but it names the merc Hold acts on.
+            _friendMercId = CoopSession.Party.Last().Mercenary?.ProfileId;
             if (mode == Loopback.Record)
             {
                 File.WriteAllBytes(file, Array.Empty<byte>());
@@ -680,14 +758,15 @@ namespace QuasimorphCoop.Net
         private static bool LocalWaiting()
         {
             State state = CoopSession.State;
-            return state != null && IsLocal(state.Get<Creatures>().Player) && CanProcess(state) && state.Get<PlayerCommandQueue>().Empty;
+            return state != null && IsLocal(state.Get<Creatures>().Player) && !Hold.IsHeld(state.Get<Creatures>().Player)
+                && CanProcess(state) && state.Get<PlayerCommandQueue>().Empty;
         }
 
         // TurnSystem.CanProcessPlayerTurn without ReadOnlyScreensPatch, and only while the merc's
         // action point is actually running: between the end of one and the start of the next the
         // game still accepts input (it runs on the next one), which would be sent with the wrong
         // action point number.
-        private static bool CanProcess(State state)
+        internal static bool CanProcess(State state)
         {
             TurnMetadata turn = state.Get<TurnMetadata>();
             Creatures creatures = state.Get<Creatures>();
@@ -936,6 +1015,7 @@ namespace QuasimorphCoop.Net
 
         public static void Flush()
         {
+            SendPendingHold();
             TrackItems();
             if (_outbox.Count == 0 || !Running)
             {
@@ -1060,6 +1140,7 @@ namespace QuasimorphCoop.Net
                 case DirectAction.Reload: PlayerInteractionSystem.Reload(creatures); break;
                 case DirectAction.ActivateUltimate: PlayerInteractionSystem.ActivateUltimatePerk(creatures, state.Get<RaidMetadata>()); break;
                 case DirectAction.ChangeDirection: creatures.Player.ChangeDirection((Direction)e.Arg); break;
+                case DirectAction.Hold: Hold.Set(_friendMercId, e.Arg != 0); break;
             }
         }
 
@@ -1068,7 +1149,7 @@ namespace QuasimorphCoop.Net
             return string.Join(", ", entries.Select(e => e.Command != null
                 ? e.Command.Type + (e.Command is MoveCommand m ? $"({m.target.X},{m.target.Y})" : e.Command is ShootCommand s ? $"({s.target.X},{s.target.Y})" : "")
                 : e.Op != 0 ? InventoryOps.Describe(e.Op, e.Data)
-                : e.Action + (e.Action == DirectAction.ChangeDirection ? $"({e.Arg})" : "")));
+                : e.Action + (e.Action == DirectAction.ChangeDirection || e.Action == DirectAction.Hold ? $"({e.Arg})" : "")));
         }
 
         private static void OnActionPointProcessed(ITurnable turnable)

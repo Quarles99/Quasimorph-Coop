@@ -21,6 +21,7 @@ namespace QuasimorphCoop
             public bool HasPosition;
             public int X;
             public int Y;
+            public bool Held;
         }
 
         // Party read from a loaded save, or carried over to the next floor; spawned on DungeonStarted.
@@ -44,7 +45,8 @@ namespace QuasimorphCoop
                     ProfileId = p.Mercenary.ProfileId,
                     HasPosition = withPositions,
                     X = p.CreatureData.Position.X,
-                    Y = p.CreatureData.Position.Y
+                    Y = p.CreatureData.Position.Y,
+                    Held = Hold.IsHeld(p)
                 })
                 .ToList();
         }
@@ -68,7 +70,8 @@ namespace QuasimorphCoop
             {
                 sb.Append(e.ProfileId).Append(' ')
                     .Append(e.HasPosition ? e.X.ToString(CultureInfo.InvariantCulture) : "-").Append(' ')
-                    .Append(e.HasPosition ? e.Y.ToString(CultureInfo.InvariantCulture) : "-").Append('\n');
+                    .Append(e.HasPosition ? e.Y.ToString(CultureInfo.InvariantCulture) : "-")
+                    .Append(e.Held ? " held" : "").Append('\n');
             }
             string fileName = FileName(metadata, locationId);
             SingletonMonoBehaviour<FileManager>.Instance.SaveFile(fileName, sb.ToString());
@@ -90,11 +93,11 @@ namespace QuasimorphCoop
             foreach (string line in text.Split('\n'))
             {
                 string[] parts = line.Trim().Split(' ');
-                if (parts.Length != 3 || parts[0].Length == 0)
+                if (parts.Length < 3 || parts.Length > 4 || parts[0].Length == 0)
                 {
                     continue;
                 }
-                Entry e = new Entry { ProfileId = parts[0] };
+                Entry e = new Entry { ProfileId = parts[0], Held = parts.Length == 4 && parts[3] == "held" };
                 if (int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out e.X)
                     && int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out e.Y))
                 {
@@ -137,12 +140,13 @@ namespace QuasimorphCoop
                     continue;
                 }
                 CoopSession.AddMerc(mercenary, position);
+                Hold.Set(e.ProfileId, e.Held);
             }
         }
 
         private static string Describe(Entry e)
         {
-            return e.HasPosition ? $"{e.ProfileId}@{e.X},{e.Y}" : $"{e.ProfileId}@near-primary";
+            return (e.HasPosition ? $"{e.ProfileId}@{e.X},{e.Y}" : $"{e.ProfileId}@near-primary") + (e.Held ? " (held)" : "");
         }
     }
 }
