@@ -20,7 +20,7 @@ namespace QuasimorphCoop.Patches
     [HarmonyPatch(typeof(PrepareRaidScreen), "StartOperationButtonOnClick")]
     internal static class MissionStartPatch
     {
-        private static bool Prefix() => Net.NetSession.AllowMissionStart();
+        private static bool Prefix(PrepareRaidScreen __instance) => Net.NetSession.AllowMissionStart(__instance);
     }
 
     [HarmonyPatch(typeof(ScreenWithShipCargo), "RecycleButtonOnClick")]

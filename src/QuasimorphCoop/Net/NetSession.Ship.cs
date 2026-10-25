@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using HarmonyLib;
 using MGSC;
 using UnityEngine;
 
@@ -16,7 +17,10 @@ namespace QuasimorphCoop.Net
     //   host checks and applies (or refuses)    -> Result(ok, reason, fresh Snapshot)
     internal static partial class NetSession
     {
-        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result }
+        // Ready: friend -> host, pressed Start (with the mission or station they had picked).
+        // PickMerc: friend -> host, wants to play another roster merc. Picked: host -> friend, the merc
+        // the friend now plays (answer to PickMerc, or the host changed the partner).
+        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result, Ready, PickMerc, Picked }
 
         private static int _shipBlobId;
         private static readonly Dictionary<int, byte[][]> _shipIncoming = new Dictionary<int, byte[][]>();
@@ -26,6 +30,7 @@ namespace QuasimorphCoop.Net
         private static Dictionary<string, string> _shipSent;
         private static bool _friendEditing;
         private static bool _startWarned;
+        private static bool _friendReady;
 
         // Friend: the snapshot this copy was last brought in line with, as this copy serializes it.
         private static int _shipAppliedVersion;
@@ -53,6 +58,7 @@ namespace QuasimorphCoop.Net
         private static void OnShipArrived()
         {
             _startWarned = false;
+            _friendReady = false;
             if (ShipHost)
             {
                 // The friend's copy may have got here first; bring it in line.
@@ -137,12 +143,15 @@ namespace QuasimorphCoop.Net
             }
         }
 
-        // PrepareRaidScreen's start button. Returns false to swallow the click.
-        public static bool AllowMissionStart()
+        // PrepareRaidScreen's start button. Returns false to swallow the click. For the friend it
+        // means "ready", with the mission or station they had open as a suggestion.
+        public static bool AllowMissionStart(PrepareRaidScreen screen)
         {
             if (ShipClient)
             {
-                Notify($"Co-op: {PeerName} starts the missions; you'll join automatically.");
+                string suggestion = Suggestion(screen);
+                SendShip(ShipMsg.Ready, w => w.Write(suggestion ?? ""));
+                Notify($"Co-op: you're ready{(suggestion != null ? $" and suggested {suggestion}" : "")}. {PeerName} starts the mission; you'll join automatically.");
                 return false;
             }
             if (ShipHost && _onShip && _friendEditing && !_startWarned)
@@ -151,7 +160,95 @@ namespace QuasimorphCoop.Net
                 Notify($"Co-op: {PeerName} is still changing their merc's gear. Press Start again to go anyway (their unsent changes would be lost).");
                 return false;
             }
+            if (ShipHost && _onShip && !_friendReady && FriendMerc(GetGlobalState()) != null && !_startWarned)
+            {
+                _startWarned = true;
+                Notify($"Co-op: {PeerName} hasn't pressed Start yet (that marks them ready). Press Start again to go anyway.");
+                return false;
+            }
             return true;
+        }
+
+        private static string Suggestion(PrepareRaidScreen screen)
+        {
+            try
+            {
+                Traverse t = Traverse.Create(screen);
+                Mission mission = t.Field("_mission").GetValue<Mission>();
+                Station station = t.Field("_station").GetValue<Station>();
+                string stationName = station == null ? null : Localization.Get("station." + station.Id + ".name");
+                if (mission != null)
+                {
+                    string name = MissionSystem.GetMissionName(t.Field("_factions").GetValue<Factions>(), mission);
+                    return stationName == null ? name : $"{name} at {stationName}";
+                }
+                return stationName == null ? null : "a visit to " + stationName;
+            }
+            catch (Exception e)
+            {
+                Log.Warn("Couldn't read the picked mission: " + e.Message);
+                return null;
+            }
+        }
+
+        public static bool IsShipClient => ShipClient;
+
+        // The merc the friend plays, as this machine knows it.
+        public static string FriendMercId => _friendMercId;
+
+        // Friend's Co-op menu on the ship: ask the host for the next available roster merc.
+        public static void RequestOwnMerc(State global)
+        {
+            List<Mercenary> candidates = Partner.Candidates(global);
+            if (candidates.Count == 0)
+            {
+                Notify("Co-op: no other merc is free (alive and not busy on the ship).");
+                return;
+            }
+            int index = candidates.FindIndex(m => m.ProfileId == _friendMercId);
+            Mercenary next = candidates[(index + 1) % candidates.Count];
+            SendShip(ShipMsg.PickMerc, w => w.Write(next.ProfileId));
+            Notify($"Co-op: asking {PeerName} for {CoopSession.DisplayName(next)}...");
+        }
+
+        // Host: the partner changed (Co-op menu) while the friend is on the ship; they play it now.
+        public static void OnPartnerChanged(State global)
+        {
+            if (!ShipHost || !_onShip)
+            {
+                return;
+            }
+            string partner = Partner.Get(global);
+            if (string.IsNullOrEmpty(partner) || partner == _friendMercId)
+            {
+                return;
+            }
+            _friendMercId = partner;
+            _friendEditing = false;
+            SendShip(ShipMsg.Picked, w => { w.Write(true); w.Write(partner); w.Write(""); });
+            HostSendSnapshot();
+        }
+
+        private static void HostPickMerc(string id)
+        {
+            State global = GetGlobalState();
+            Mercenary merc = global?.Get<Mercenaries>()?.Get(id);
+            string why = !_onShip ? "only between missions, on the ship"
+                : merc == null ? "no such merc"
+                : !Partner.IsAvailable(merc) ? CoopSession.DisplayName(merc) + " isn't free (dead, gone, or busy on the ship)"
+                : null;
+            if (why != null)
+            {
+                SendShip(ShipMsg.Picked, w => { w.Write(false); w.Write(_friendMercId ?? ""); w.Write(why); });
+                return;
+            }
+            Partner.Set(global, id);
+            _friendMercId = id;
+            _friendEditing = false;
+            _friendReady = false;
+            Notify($"Co-op: {PeerName} now plays {CoopSession.DisplayName(merc)}.");
+            SendShip(ShipMsg.Picked, w => { w.Write(true); w.Write(id); w.Write(""); });
+            HostSendSnapshot();
         }
 
         // Recycling runs on a timer in the ship's state, which the friend's copy can't hand over.
@@ -180,6 +277,7 @@ namespace QuasimorphCoop.Net
                             if (arsenal)
                             {
                                 _friendEditing = true;
+                                _friendReady = false;
                                 Notify($"Co-op: {PeerName} is changing {FriendMercName(GetGlobalState())}'s gear.");
                             }
                         }
@@ -203,6 +301,37 @@ namespace QuasimorphCoop.Net
                     {
                         int version = r.ReadInt32();
                         HostApplyChange(version, ShipSync.Read(r));
+                    }
+                    break;
+                case ShipMsg.Ready:
+                    if (_role == Role.Host)
+                    {
+                        string suggestion = r.ReadString();
+                        _friendReady = true;
+                        Notify($"Co-op: {PeerName} is ready" + (suggestion.Length > 0 ? $" and suggests {suggestion}." : "."));
+                    }
+                    break;
+                case ShipMsg.PickMerc:
+                    if (_role == Role.Host)
+                    {
+                        HostPickMerc(r.ReadString());
+                    }
+                    break;
+                case ShipMsg.Picked:
+                    if (_role == Role.Client)
+                    {
+                        bool ok = r.ReadBoolean();
+                        string id = r.ReadString();
+                        string reason = r.ReadString();
+                        if (ok)
+                        {
+                            _friendMercId = id;
+                            Notify($"Co-op: you now play {CoopSession.DisplayName(GetGlobalState()?.Get<Mercenaries>()?.Get(id))}.");
+                        }
+                        else
+                        {
+                            Notify($"Co-op: {PeerName}'s game didn't switch your merc ({reason}).");
+                        }
                     }
                     break;
                 case ShipMsg.Result:

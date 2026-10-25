@@ -166,14 +166,26 @@ namespace QuasimorphCoop.Menus
 
             if (state?.Get<SavedGameMetadata>() != null)
             {
-                string partnerId = Partner.Get(state);
+                // On the host's ship the friend picks their own merc; the host approves it.
+                bool friend = NetSession.IsShipClient;
+                string partnerId = friend ? NetSession.FriendMercId : Partner.Get(state);
                 Mercenary partner = partnerId == null ? null : state.Get<Mercenaries>().Get(partnerId);
                 string partnerName = partner == null ? "none" : ShortName(partner);
                 entries.Add(new Entry
                 {
-                    Label = "Partner: " + partnerName,
+                    Label = (friend ? "Your merc: " : "Partner: ") + partnerName,
                     Enabled = !NetSession.Engaged,
-                    OnClick = () => CyclePartner(state)
+                    OnClick = () =>
+                    {
+                        if (friend)
+                        {
+                            NetSession.RequestOwnMerc(state);
+                        }
+                        else
+                        {
+                            CyclePartner(state);
+                        }
+                    }
                 });
                 if (NetSession.LocalInputAllowed)
                 {
@@ -254,6 +266,7 @@ namespace QuasimorphCoop.Menus
             int index = candidates.FindIndex(m => m.ProfileId == current);
             Mercenary next = index + 1 < candidates.Count ? candidates[index + 1] : null;
             Partner.Set(state, next?.ProfileId);
+            NetSession.OnPartnerChanged(state);
 
             if (!CoopSession.InDungeon)
             {
