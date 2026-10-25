@@ -328,6 +328,15 @@ namespace QuasimorphCoop.Lockstep
                     Append($"gear P{p.CreatureData.UniqueId} {id}: {(taken ? "ok" : "failed")}");
                 }
             }
+            // hp=N: every party merc starts at N health (to drive deaths and the mission end).
+            int hp = int.Parse(Get("hp", "0"), CultureInfo.InvariantCulture);
+            if (hp > 0)
+            {
+                foreach (Player p in CoopSession.Party)
+                {
+                    p.CreatureData.Health.Value = hp;
+                }
+            }
             if (_treatEvery > 0 && CoopSession.Party.Count > 1)
             {
                 // The partner gets wounds (as the game's rndwound command does) and every merc gets

@@ -149,6 +149,12 @@ namespace QuasimorphCoop.Lockstep
         }
     }
 
+    [HarmonyPatch(typeof(DungeonGameMode), "Update")]
+    internal static class SimTickCountPatch
+    {
+        private static void Prefix() => FixedProjectileStep.Ticks++;
+    }
+
     internal sealed class WaitSimTicks : CustomYieldInstruction
     {
         private readonly long _until;
@@ -168,7 +174,9 @@ namespace QuasimorphCoop.Lockstep
     {
         public const float Step = 1f / 30f;
 
-        // Tick_Dungeon calls with the fixed step so far (see WaitSimTicks).
+        // DungeonGameMode.Update calls so far (see WaitSimTicks): Tick_Dungeon runs at most once in
+        // each, so this keeps pace with the projectile step, and it keeps counting when the update
+        // returns early (dead merc, mission finished) or lockstep has stopped, so no wait hangs.
         public static long Ticks;
 
         private static bool _savedOverride;
