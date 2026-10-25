@@ -26,6 +26,7 @@ Both games check they're in sync after every action. If they ever differ, they r
 
 [h2]Good to know[/h2]
 [list]
+[*]Twice the enemies by default when playing with a partner, to balance the second merc. Change it with [b]Enemies[/b] in the Co-op menu (x1, x1.5 or x2).
 [*]It's the host's campaign. The friend plays in a hidden copy (slot 9), so their own saves are never touched.
 [*]Only the host starts missions and manages the ship (trading, crew, crafting); the friend manages their own merc's gear.
 [*]Hotseat without going online: pick a Partner in the Co-op menu and both mercs take turns on one PC.

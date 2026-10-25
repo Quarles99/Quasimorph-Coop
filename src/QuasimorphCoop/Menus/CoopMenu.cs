@@ -175,6 +175,12 @@ namespace QuasimorphCoop.Menus
                     Enabled = !NetSession.Engaged,
                     OnClick = () => CyclePartner(state)
                 });
+                entries.Add(new Entry
+                {
+                    Label = "Enemies: " + EnemyScaling.Label(EnemyScaling.Get(state)),
+                    Enabled = !NetSession.Engaged,
+                    OnClick = () => CycleEnemies(state)
+                });
             }
 
             if (!NetSession.Active)
@@ -242,6 +248,15 @@ namespace QuasimorphCoop.Menus
             {
                 NetSession.Notify("Co-op: the new partner joins from the next level on.");
             }
+        }
+
+        // x1 -> x1.5 -> x2 -> x1. Applies from the next level (and to reinforcements right away).
+        private static void CycleEnemies(State state)
+        {
+            int index = Array.IndexOf(EnemyScaling.Choices, EnemyScaling.Get(state));
+            float next = EnemyScaling.Choices[(index + 1) % EnemyScaling.Choices.Length];
+            EnemyScaling.Set(state, next);
+            NetSession.Notify($"Co-op: {EnemyScaling.Label(next)} enemies with a partner, from the next level on.");
         }
 
         // Button width is limited; the first word of the merc's name is enough to tell them apart.

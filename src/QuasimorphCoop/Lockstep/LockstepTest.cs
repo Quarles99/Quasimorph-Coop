@@ -146,6 +146,57 @@ namespace QuasimorphCoop.Lockstep
             StartCoroutine(Net.NetSession.ReloadSlot(target));
         }
 
+        // selftest=enemies: the multiplier's rules, and the game's own unit generator spending about
+        // twice the points with it (averaged, since groups are drawn at random).
+        private static string EnemySelftest()
+        {
+            List<string> report = new List<string>();
+            bool ok = true;
+            void Check(bool condition, string what)
+            {
+                report.Add((condition ? "ok " : "FAILED ") + what);
+                ok &= condition;
+            }
+            State state = CoopSession.State;
+            Check(CoopSession.Active, "two mercs deployed");
+            try
+            {
+                EnemyScaling.Override = 2f;
+                Check(EnemyScaling.Multiplier("any") == 2f, "x2 during the mission");
+                EnemyScaling.BeginGenerationForTest(2f, "allies");
+                Check(EnemyScaling.Multiplier("enemies") == 2f && EnemyScaling.Multiplier("allies") == 1f, "generation doubles enemies, not allies");
+                EnemyScaling.EndGeneration();
+
+                string location = Data.LocationUnitDrop.Ids.FirstOrDefault(id => Data.LocationUnitDrop.Get(id)?.Count > 0);
+                Check(location != null, "a unit table: " + location);
+                float Spend(float multiplier)
+                {
+                    EnemyScaling.Override = multiplier;
+                    float total = 0f;
+                    for (int i = 0; i < 40; i++)
+                    {
+                        total += UnitGenerationSystem.GenerateUnitsByPoints(state.Get<Statistics>(), state.Get<Difficulty>(), new List<string> { location }, null, 60f, Data.Global.MaxTechLevel).Sum(u => u.Points);
+                    }
+                    return total / 40f;
+                }
+                UnityEngine.Random.State saved = UnityEngine.Random.state;
+                float single = Spend(1f), doubled = Spend(2f);
+                UnityEngine.Random.state = saved;
+                float ratio = single > 0f ? doubled / single : 0f;
+                Check(ratio > 1.6f && ratio < 2.4f, $"points spent per call: x1 {single:0.0}, x2 {doubled:0.0} (ratio {ratio:0.00})");
+            }
+            catch (Exception e)
+            {
+                Check(false, "exception " + e);
+            }
+            finally
+            {
+                EnemyScaling.Override = null;
+                EnemyScaling.EndGeneration();
+            }
+            return (ok ? "PASS " : "FAIL ") + string.Join("; ", report);
+        }
+
         private void FinishSelftest()
         {
             State state = CoopSession.State;
@@ -168,6 +219,13 @@ namespace QuasimorphCoop.Lockstep
             }
 
             string selftest = Get("selftest", "");
+            if (selftest == "enemies")
+            {
+                string result = EnemySelftest();
+                Append("enemy selftest: " + result);
+                Finish(result.StartsWith("PASS") ? "DONE enemy selftest passed" : "FAIL enemy selftest");
+                return;
+            }
             if (selftest == "ship")
             {
                 Player partner = CoopSession.Party.FirstOrDefault(p => p != CoopSession.Primary);
