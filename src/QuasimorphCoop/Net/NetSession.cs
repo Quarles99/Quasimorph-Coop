@@ -25,9 +25,9 @@ namespace QuasimorphCoop.Net
     //    direct actions) are sent and replayed on the other machine at the same action point.
     //    The other machine blocks local input meanwhile. After every action point both sides
     //    exchange a state hash to catch desyncs.
-    internal static class NetSession
+    internal static partial class NetSession
     {
-        public const string ProtocolVersion = "3";
+        public const string ProtocolVersion = "4";
 
         private enum Role { None, Host, Client }
 
@@ -234,6 +234,9 @@ namespace QuasimorphCoop.Net
             _pendingWorld = null;
             _hostLoaded = _clientReady = false;
             _resyncs = 0;
+            _shipIncoming.Clear();
+            _shipSent = _shipBaseline = null;
+            _friendEditing = _editingOwnMerc = false;
             SteamNet.Instance?.Leave();
         }
 
@@ -271,6 +274,7 @@ namespace QuasimorphCoop.Net
                     case MsgType.Hash: OnRemoteHash(r.ReadInt32(), r.ReadString(), r.ReadString()); break;
                     case MsgType.Bye: Stop($"{SteamNet.Instance.PeerName} left: {r.ReadString()}"); break;
                     case MsgType.Ping: break;
+                    case MsgType.ShipChunk: OnShipChunk(r); break;
                 }
             }
         }
@@ -323,6 +327,10 @@ namespace QuasimorphCoop.Net
             }
             if (!CoopSession.InDungeon)
             {
+                if (_onShip)
+                {
+                    SendShipSave();
+                }
                 Notify($"Co-op: {SteamNet.Instance.PeerName} will join you when you start a mission.");
                 return;
             }
@@ -344,12 +352,28 @@ namespace QuasimorphCoop.Net
             _friendMercId = CoopSession.Party.Any(p => p.Mercenary?.ProfileId == partner) ? partner : CoopSession.Party.Last().Mercenary?.ProfileId;
             _phase = Phase.Loading;
             _hostLoaded = _clientReady = false;
-            SteamNet.Instance.StartCoroutine(SendWorldThenReload(slot, SlotFiles.Read(slot)));
+            SteamNet.Instance.StartCoroutine(SendWorldThenReload(slot, SlotFiles.Read(slot), reloadHost: true));
+        }
+
+        // Joined between missions: the friend loads the host's ship (a copy, like levels) so they can
+        // equip their merc there. Nothing to keep in lockstep, so the host doesn't reload.
+        private static void SendShipSave()
+        {
+            State global = GetGlobalState();
+            string partner = Partner.Get(global);
+            if (global == null || string.IsNullOrEmpty(partner))
+            {
+                return;
+            }
+            global.Get<SaveManager>().SaveGame();
+            _friendMercId = partner;
+            int slot = global.Get<SavedGameMetadata>().Slot;
+            SteamNet.Instance.StartCoroutine(SendWorldThenReload(slot, SlotFiles.Read(slot), reloadHost: false));
         }
 
         // Steam's per-connection send buffer is smaller than a save (~1.3 MB), so send one chunk per
         // frame and back off while the buffer is full. Abort (without reloading) if it never drains.
-        private static IEnumerator SendWorldThenReload(int slot, Dictionary<string, byte[]> files)
+        private static IEnumerator SendWorldThenReload(int slot, Dictionary<string, byte[]> files, bool reloadHost)
         {
             List<byte[]> chunks = new List<byte[]>();
             foreach (KeyValuePair<string, byte[]> file in files)
@@ -382,7 +406,7 @@ namespace QuasimorphCoop.Net
                 int attempts = 0;
                 while (!SteamNet.Instance.Send(chunk))
                 {
-                    if (_phase != Phase.Loading)
+                    if (reloadHost ? _phase != Phase.Loading : _phase < Phase.Connected)
                     {
                         yield break;
                     }
@@ -395,8 +419,11 @@ namespace QuasimorphCoop.Net
                 }
                 yield return null;
             }
-            Log.Info($"Sent {files.Count} files ({files.Values.Sum(f => f.Length)} bytes, {chunks.Count} messages) from slot {slot}; reloading it.");
-            SteamNet.Instance.StartCoroutine(LoadSlot(slot));
+            Log.Info($"Sent {files.Count} files ({files.Values.Sum(f => f.Length)} bytes, {chunks.Count} messages) from slot {slot}{(reloadHost ? "; reloading it" : "")}.");
+            if (reloadHost)
+            {
+                SteamNet.Instance.StartCoroutine(LoadSlot(slot));
+            }
         }
 
         // Loads a save slot from whatever mode the game is in (menu, ship or mission), like the
@@ -477,12 +504,20 @@ namespace QuasimorphCoop.Net
         public static void OnSpaceStarted()
         {
             _onShip = true;
+            if (_role == Role.Client && _phase == Phase.Loading)
+            {
+                // The host sent its ship (joined between missions), not a level.
+                _phase = Phase.Connected;
+                Log.Info("Loaded the host's ship.");
+            }
             TryLoadPendingWorld();
+            OnShipArrived();
         }
 
         public static void OnSpaceFinished()
         {
             _onShip = false;
+            OnShipLeft();
         }
 
         public static void OnMainMenuStarted()
@@ -660,6 +695,22 @@ namespace QuasimorphCoop.Net
         }
 
         public static bool LocalInputAllowed => !Engaged || (Running && IsLocal(CoopSession.Creatures?.Player));
+
+        // The merc on screen is the other player's, so windows its replayed actions open here
+        // (station and shuttle menus) are theirs to use, not ours.
+        public static bool WatchingOther => Running && !IsLocal(CoopSession.Creatures?.Player);
+
+        // Aborting ends the mission for both players, so it's the host's call while the host still
+        // has a living merc. Returns why it's blocked, or null.
+        public static string AbortBlockedReason()
+        {
+            if (!Engaged || _loopback != Loopback.None || _role != Role.Client)
+            {
+                return null;
+            }
+            bool hostMercAlive = CoopSession.Party.Any(p => p.CreatureData.Health.Alive && p.Mercenary?.ProfileId != _friendMercId);
+            return hostMercAlive ? "only the host can abort the mission. Use Leave co-op to stop playing." : null;
+        }
 
         // The other player's merc is on screen and a screen other than the HUD (inventory, health,
         // corpse) is open: let it be looked at but not changed.
@@ -1027,7 +1078,7 @@ namespace QuasimorphCoop.Net
             }
             _apSeq++;
             State state = CoopSession.State;
-            string description = StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber);
+            string description = StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber, state.Get<MapObstacles>());
             string hash = StateHash.Hash(description);
             int seq = _apSeq;
             Send(Wire.Build(MsgType.Hash, w =>

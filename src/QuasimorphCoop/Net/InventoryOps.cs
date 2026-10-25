@@ -25,7 +25,15 @@ namespace QuasimorphCoop.Net
         Propagate,     // PlayerActionHappened       EffectsController.PropagateAction
         EndTurnCall,   // PlayerEndTurnContext       PlayerInteractionSystem.EndPlayerTurn
         TurnEnd,       // the action point ended outside the simulation (inventory closed, corpse opened)
-        Wound          // wound slot id, mode, item, spendTurn   HealthScreen.WoundSlotOnClicked
+        Wound,         // wound slot id, mode, item, spendTurn   HealthScreen.WoundSlotOnClicked
+        HealHP,        // obstacle                   HealStation.HealHP (see StationOps)
+        HealWounds,    // obstacle                   HealStation.HealAllWounds
+        Recharge,      // obstacle                   RechargeStation.RechargeImplants
+        RepairAll,     // obstacle                   RepairStation.RepairItems
+        Battery,       // obstacle                   a station window's battery button
+        Craft,         // obstacle, receipt, count   WorkbenchWindow crafting
+        MissionExit,   //                            ShuttleWindow mission exit
+        Abort          // station leave              DungeonGameMode abort mission
     }
 
     internal static class InventoryOps
@@ -85,6 +93,16 @@ namespace QuasimorphCoop.Net
                             break;
                         case InventoryOp.Wound:
                             Wound(player, r.ReadString(), (HealthScreen.ApplyMedkitMode)r.ReadInt32(), ItemSync.ReadItem(r, state), r.ReadBoolean());
+                            break;
+                        case InventoryOp.HealHP:
+                        case InventoryOp.HealWounds:
+                        case InventoryOp.Recharge:
+                        case InventoryOp.RepairAll:
+                        case InventoryOp.Battery:
+                        case InventoryOp.Craft:
+                        case InventoryOp.MissionExit:
+                        case InventoryOp.Abort:
+                            StationOps.Execute(state, op, r);
                             break;
                         default:
                             throw new InvalidDataException("Unknown inventory op " + op);

@@ -23,7 +23,10 @@ namespace QuasimorphCoop.Net
     // calls instead (see InventoryOps); items they take as arguments are sent as an ItemRef.
     internal static class ItemSync
     {
-        private enum Kind : byte { Creature = 1, Corpse, Store, Quest, Floor, InventoryFields }
+        private enum Kind : byte { Creature = 1, Corpse, Store, Quest, Floor, InventoryFields, Cargo }
+
+        // Cargo addresses: the ship's cargo tabs by index, and the shuttle cargo department.
+        private const int ShuttleCargoIndex = 100;
 
         // Where a storage lives, in a form that names the same storage on both machines.
         private struct Address
@@ -56,7 +59,7 @@ namespace QuasimorphCoop.Net
         // Serializing or loading items can draw from UnityEngine.Random (lazy rolls in getters and
         // after-load hooks), and only one machine does each of these. Keep them from moving the
         // random state, which is shared with the simulation when it runs inside its scope.
-        private struct RngGuard : IDisposable
+        internal struct RngGuard : IDisposable
         {
             private readonly UnityEngine.Random.State _saved;
 
@@ -65,7 +68,7 @@ namespace QuasimorphCoop.Net
             public void Dispose() => UnityEngine.Random.state = _saved;
         }
 
-        private static RngGuard KeepRng() => new RngGuard(true);
+        internal static RngGuard KeepRng() => new RngGuard(true);
 
         private static readonly Dictionary<string, string> _baseline = new Dictionary<string, string>();
 
@@ -294,11 +297,32 @@ namespace QuasimorphCoop.Net
                         {
                             result.Add(new Watched { Address = new Address { Kind = Kind.Quest, A = obstacle.UniqueId }, Storage = quest.Storage });
                         }
+                        // The shuttle's menu opens the ship cargo and the shuttle cargo.
+                        if (obstacle.GetComponent<Shuttle>() != null)
+                        {
+                            AddCargo(result, state);
+                        }
                     }
                 }
             }
             return result;
         }
+
+        private static void AddCargo(List<Watched> result, State state)
+        {
+            List<ItemStorage> ship = StationOps.Global<MagnumCargo>(state)?.ShipCargo;
+            for (int i = 0; ship != null && i < ship.Count; i++)
+            {
+                result.Add(new Watched { Address = new Address { Kind = Kind.Cargo, A = i }, Storage = ship[i] });
+            }
+            ItemStorage shuttle = ShuttleCargo(state);
+            if (shuttle != null)
+            {
+                result.Add(new Watched { Address = new Address { Kind = Kind.Cargo, A = ShuttleCargoIndex }, Storage = shuttle });
+            }
+        }
+
+        private static ItemStorage ShuttleCargo(State state) => StationOps.Global<MagnumProgression>(state)?.GetDepartment<ShuttleCargoDepartment>()?.ShuttleCargo;
 
         private static void AddInventory(List<Watched> result, Kind kind, int owner, Inventory inventory, bool withFields)
         {
@@ -378,6 +402,9 @@ namespace QuasimorphCoop.Net
                             touchedObstacles.Add(obstacle);
                             break;
                         }
+                        case Kind.Cargo:
+                            (Resolve(state, a) ?? throw new InvalidDataException($"No cargo storage {a.Key}.")).LoadJSON(node);
+                            break;
                         case Kind.Floor:
                         {
                             ItemOnFloor pile = state.Get<ItemsOnFloor>().GetOrCreate(new CellPosition(a.A, a.B));
@@ -412,6 +439,20 @@ namespace QuasimorphCoop.Net
                 obstacle.RefreshVisual();
             }
             RefreshScreens();
+        }
+
+        // For ShipSync, which keeps roster mercs' gear (not creatures) in sync the same way.
+        public static string SerializeInventoryFields(Inventory inventory) => Serialize(new Watched { Inventory = inventory });
+
+        public static void LoadInventoryFields(Inventory inventory, JSONNode node) => LoadFromJSON.LoadFieldsAndProperties(inventory, node, false);
+
+        public static void AfterInventoryLoad(Inventory inventory)
+        {
+            inventory.RecalculateCurrentWeight();
+            foreach (string name in InventoryEvents)
+            {
+                Raise(inventory, name);
+            }
         }
 
         private static void Touch(Dictionary<Creature, WeaponSlotType> touched, Creature creature)
@@ -589,6 +630,15 @@ namespace QuasimorphCoop.Net
                 case Kind.Store: return state.Get<MapObstacles>().Get(a.A)?.GetComponent<Store>()?.storage;
                 case Kind.Quest: return state.Get<MapObstacles>().Get(a.A)?.GetComponent<QuestInteractiveStorage>()?.Storage;
                 case Kind.Floor: return state.Get<ItemsOnFloor>().Get(a.A, a.B)?.Storage;
+                case Kind.Cargo:
+                {
+                    if (a.A == ShuttleCargoIndex)
+                    {
+                        return ShuttleCargo(state);
+                    }
+                    List<ItemStorage> ship = StationOps.Global<MagnumCargo>(state)?.ShipCargo;
+                    return ship != null && a.A >= 0 && a.A < ship.Count ? ship[a.A] : null;
+                }
                 default: return null;
             }
         }

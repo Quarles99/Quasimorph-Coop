@@ -38,6 +38,12 @@ namespace QuasimorphCoop.Lockstep
         private InventoryBot _inventoryBot;
         private int _inventoryEvery;
         private int _inventoryDoneAt = -1;
+        private StationBot _stationBot;
+        private int _stationEvery;
+        private int _stationDoneAt = -1;
+        private int _exitAt;
+        private int _abortAt;
+        private bool _exitPressed;
 
         public static bool Active => _instance != null;
 
@@ -162,6 +168,14 @@ namespace QuasimorphCoop.Lockstep
             }
 
             string selftest = Get("selftest", "");
+            if (selftest == "ship")
+            {
+                Player partner = CoopSession.Party.FirstOrDefault(p => p != CoopSession.Primary);
+                string result = partner?.Mercenary == null ? "FAIL no partner merc" : Net.NetSession.ShipSelftest(partner.Mercenary);
+                Append("ship selftest: " + result);
+                Finish(result.StartsWith("PASS") ? "DONE ship selftest passed" : "FAIL ship selftest");
+                return;
+            }
             if (selftest.Length > 0)
             {
                 StartSelftest(state, selftest);
@@ -178,6 +192,17 @@ namespace QuasimorphCoop.Lockstep
             {
                 _inventoryBot = new InventoryBot(Append, _botRng);
             }
+            // stn=N: every Nth player action point (offset from inv) presses a station button.
+            // exitat=N: leave by shuttle once N player action points have passed.
+            _stationEvery = int.Parse(Get("stn", "0"), CultureInfo.InvariantCulture);
+            if (_stationEvery > 0)
+            {
+                _stationBot = new StationBot(Append);
+            }
+            _exitAt = int.Parse(Get("exitat", "0"), CultureInfo.InvariantCulture);
+            _abortAt = int.Parse(Get("abortat", "0"), CultureInfo.InvariantCulture);
+            FinishGameProbe.Reason = null;
+            Append($"stations {StationBot.Inventory(state)}");
 
             _turnController = state.Get<TurnController>();
             SpawnTestMonsters(state);
@@ -234,6 +259,37 @@ namespace QuasimorphCoop.Lockstep
                     Append($"gear P{p.CreatureData.UniqueId} {id}: {(taken ? "ok" : "failed")}");
                 }
             }
+            // The station bot's battery button needs batteries; hurt mercs and drained stations
+            // give its other buttons something to do.
+            string battery = Data.Global.ValidRechargeBatteries?.FirstOrDefault();
+            if (_stationEvery > 0)
+            {
+                foreach (Player p in CoopSession.Party)
+                {
+                    p.CreatureData.Health.Value = p.CreatureData.Health.Value * 6 / 10;
+                }
+                foreach (MapObstacle o in state.Get<MapObstacles>().Obstacles)
+                {
+                    UsesEnergy energy = o == null ? null : o.GetComponent<UsesEnergy>();
+                    if (energy != null)
+                    {
+                        energy.Energy = 1;
+                    }
+                }
+            }
+            if (_stationEvery > 0 && battery != null)
+            {
+                foreach (Player p in CoopSession.Party)
+                {
+                    BasePickupItem item = SingletonMonoBehaviour<ItemFactory>.Instance.CreateForInventory(battery);
+                    if (item != null)
+                    {
+                        item.StackCount = 10;
+                    }
+                    bool taken = item != null && p.CreatureData.Inventory.TakeOrEquip(item, putIfSlotBusy: true);
+                    Append($"gear P{p.CreatureData.UniqueId} {battery}x10: {(taken ? "ok" : "failed")}");
+                }
+            }
             string corpse = Get("corpse", "");
             if (corpse.Length > 0 && CoopSession.FindFreeCellNear(CoopSession.Primary.CreatureData.Position, out CellPosition pos))
             {
@@ -267,7 +323,7 @@ namespace QuasimorphCoop.Lockstep
             }
             _lastApTime = Time.realtimeSinceStartup;
             string who = turnable is Creature c ? $"{(turnable is Player ? "P" : "M")}{c.CreatureData.UniqueId}" : turnable?.GetType().Name ?? "null";
-            string description = StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber);
+            string description = StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber, state.Get<MapObstacles>());
             Append($"{_apSeq} {who} {StateHash.Hash(description)} {description}{JsonDigest()}");
             if (turnable is Player)
             {
@@ -302,6 +358,11 @@ namespace QuasimorphCoop.Lockstep
             if (now - _startTime > 900f)
             {
                 Finish("TIMEOUT (15 min)");
+                return;
+            }
+            if (_running && FinishGameProbe.Reason != null)
+            {
+                Finish($"DONE level finished ({FinishGameProbe.Reason}) after {_playerAps} player APs, {_apSeq} total APs");
                 return;
             }
             if (!_running || !CoopSession.InDungeon)
@@ -350,6 +411,24 @@ namespace QuasimorphCoop.Lockstep
             {
                 _inventoryDoneAt = _apSeq;
                 _inventoryBot.Act(state, player);
+                return;
+            }
+            if (_stationBot != null && _stationDoneAt != _apSeq && (_playerAps + 1) % _stationEvery == 0)
+            {
+                _stationDoneAt = _apSeq;
+                _stationBot.Act(state, player);
+                return;
+            }
+            if (_exitAt > 0 && _playerAps >= _exitAt && !_exitPressed)
+            {
+                _exitPressed = true;
+                Append($"bot P{player.CreatureData.UniqueId} {StationBot.Exit()}");
+                return;
+            }
+            if (_abortAt > 0 && _playerAps >= _abortAt && !_exitPressed)
+            {
+                _exitPressed = true;
+                Append($"bot P{player.CreatureData.UniqueId} {AbortBot.Abort()}");
                 return;
             }
             if (++_attemptsThisAp > 3)

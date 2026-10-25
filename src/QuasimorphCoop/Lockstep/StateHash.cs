@@ -7,7 +7,7 @@ using MGSC;
 namespace QuasimorphCoop.Lockstep
 {
     // A cheap fingerprint of the simulation: every creature's id, position, HP and alive flag,
-    // plus the gameplay RNG state. Two machines in lockstep must produce the same string.
+    // the charge left in powered map objects (stations), plus the gameplay RNG state. Two machines in lockstep must produce the same string.
     internal static class StateHash
     {
         private static readonly AccessTools.StructFieldRef<UnityEngine.Random.State, int>[] RngFields =
@@ -18,7 +18,7 @@ namespace QuasimorphCoop.Lockstep
             AccessTools.StructFieldRefAccess<UnityEngine.Random.State, int>("s3"),
         };
 
-        public static string Describe(Creatures creatures, int turnNumber)
+        public static string Describe(Creatures creatures, int turnNumber, MapObstacles obstacles = null)
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("t").Append(turnNumber.ToString(CultureInfo.InvariantCulture));
@@ -42,7 +42,25 @@ namespace QuasimorphCoop.Lockstep
                     sb.Append('i').Append(InventoryDigest(d.Inventory)).Append('w').Append((int)d.Inventory.CurrentSlotType);
                 }
             }
+            if (obstacles != null)
+            {
+                sb.Append(" e").Append(EnergyDigest(obstacles));
+            }
             return sb.ToString();
+        }
+
+        private static string EnergyDigest(MapObstacles obstacles)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (MapObstacle o in obstacles.Obstacles)
+            {
+                UsesEnergy energy = o == null ? null : o.GetComponent<UsesEnergy>();
+                if (energy != null)
+                {
+                    sb.Append(o.UniqueId.ToString(CultureInfo.InvariantCulture)).Append(':').Append(energy.Energy.ToString(CultureInfo.InvariantCulture)).Append(';');
+                }
+            }
+            return Hash(sb.ToString()).Substring(0, 8);
         }
 
         // Every item a merc carries: id, stack, position, and loaded ammo for weapons.

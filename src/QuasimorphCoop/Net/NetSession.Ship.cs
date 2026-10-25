@@ -1,0 +1,537 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using MGSC;
+using UnityEngine;
+
+namespace QuasimorphCoop.Net
+{
+    // Between missions (see ShipSync): the friend equips their merc on their copy of the host's
+    // ship and the host applies the result to the real one.
+    //
+    //   friend opens the arsenal for their merc  -> Request(arsenal)  -> host sends Snapshot
+    //   friend closes it                        -> Change(changed storages, snapshot version)
+    //   host checks and applies (or refuses)    -> Result(ok, reason, fresh Snapshot)
+    internal static partial class NetSession
+    {
+        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result }
+
+        private static int _shipBlobId;
+        private static readonly Dictionary<int, byte[][]> _shipIncoming = new Dictionary<int, byte[][]>();
+
+        // Host: what the friend was last sent.
+        private static int _shipVersion;
+        private static Dictionary<string, string> _shipSent;
+        private static bool _friendEditing;
+        private static bool _startWarned;
+
+        // Friend: the snapshot this copy was last brought in line with, as this copy serializes it.
+        private static int _shipAppliedVersion;
+        private static Dictionary<string, string> _shipBaseline;
+        private static bool _editingOwnMerc;
+
+        private static bool ShipHost => _role == Role.Host && _phase >= Phase.Connected && _loopback == Loopback.None;
+
+        private static bool ShipClient => _role == Role.Client && _phase == Phase.Connected && _loopback == Loopback.None && _onShip;
+
+        private static string PeerName => SteamNet.Instance?.PeerName ?? "your friend";
+
+        private static Mercenary FriendMerc(State global) => string.IsNullOrEmpty(_friendMercId) ? null : global?.Get<Mercenaries>()?.Get(_friendMercId);
+
+        private static string FriendMercName(State global) => CoopSession.DisplayName(FriendMerc(global));
+
+        // ---------------------------------------------------------------- hooks
+
+        // The friend arrived on (their copy of) the ship.
+        private static void OnShipArrived()
+        {
+            _startWarned = false;
+            if (ShipHost)
+            {
+                // The friend's copy may have got here first; bring it in line.
+                if (FriendMerc(GetGlobalState()) != null)
+                {
+                    HostSendSnapshot();
+                }
+                return;
+            }
+            if (!ShipClient)
+            {
+                return;
+            }
+            State global = GetGlobalState();
+            if (FriendMerc(global) == null)
+            {
+                return;
+            }
+            SendShip(ShipMsg.Request, w => w.Write(false));
+            Notify($"Co-op: this is a copy of {PeerName}'s ship. Change {FriendMercName(global)}'s gear in the Equipment screen and it's sent to {PeerName}; other changes here aren't kept.");
+        }
+
+        private static void OnShipLeft()
+        {
+            _editingOwnMerc = false;
+            if (_role == Role.Host && _friendEditing)
+            {
+                Log.Info("Left the ship while the friend was still editing.");
+            }
+            _friendEditing = false;
+        }
+
+        public static void OnArsenalOpened(Mercenary merc)
+        {
+            if (!ShipClient)
+            {
+                return;
+            }
+            if (merc != null && merc.ProfileId == _friendMercId)
+            {
+                _editingOwnMerc = true;
+                SendShip(ShipMsg.Request, w => w.Write(true));
+            }
+            else
+            {
+                Notify($"Co-op: only {FriendMercName(GetGlobalState())}'s gear is sent to {PeerName}; changes to other mercs or cargo here aren't kept.");
+            }
+        }
+
+        public static void OnArsenalClosed()
+        {
+            if (!_editingOwnMerc)
+            {
+                return;
+            }
+            _editingOwnMerc = false;
+            State global = GetGlobalState();
+            Mercenary merc = FriendMerc(global);
+            if (!ShipClient)
+            {
+                return;
+            }
+            Dictionary<string, string> changes = new Dictionary<string, string>();
+            if (merc != null && _shipBaseline != null)
+            {
+                try
+                {
+                    changes = ShipSync.Changes(_shipBaseline, ShipSync.Snapshot(global, merc));
+                }
+                catch (Exception e)
+                {
+                    Log.Error("Couldn't read the ship's storages: " + e);
+                }
+            }
+            // An empty change still tells the host the friend is done.
+            SendShip(ShipMsg.Change, w => { w.Write(_shipAppliedVersion); ShipSync.Write(w, changes); });
+            if (changes.Count > 0)
+            {
+                Log.Info($"Sent gear change ({string.Join(" ", changes.Keys)}) based on ship version {_shipAppliedVersion}.");
+                Notify($"Co-op: sending your gear to {PeerName}...");
+            }
+        }
+
+        // PrepareRaidScreen's start button. Returns false to swallow the click.
+        public static bool AllowMissionStart()
+        {
+            if (ShipClient)
+            {
+                Notify($"Co-op: {PeerName} starts the missions; you'll join automatically.");
+                return false;
+            }
+            if (ShipHost && _onShip && _friendEditing && !_startWarned)
+            {
+                _startWarned = true;
+                Notify($"Co-op: {PeerName} is still changing their merc's gear. Press Start again to go anyway (their unsent changes would be lost).");
+                return false;
+            }
+            return true;
+        }
+
+        // Recycling runs on a timer in the ship's state, which the friend's copy can't hand over.
+        public static bool AllowRecycle()
+        {
+            if (ShipClient)
+            {
+                Notify($"Co-op: only {PeerName} can recycle.");
+                return false;
+            }
+            return true;
+        }
+
+        // ---------------------------------------------------------------- messages
+
+        private static void OnShipMessage(ShipMsg kind, BinaryReader r)
+        {
+            switch (kind)
+            {
+                case ShipMsg.Request:
+                    if (_role == Role.Host)
+                    {
+                        bool arsenal = r.ReadBoolean();
+                        if (HostSendSnapshot())
+                        {
+                            if (arsenal)
+                            {
+                                _friendEditing = true;
+                                Notify($"Co-op: {PeerName} is changing {FriendMercName(GetGlobalState())}'s gear.");
+                            }
+                        }
+                        else if (arsenal)
+                        {
+                            // (An arrival request needs no answer: the host sends a snapshot when it gets to the ship.)
+                            string why = _onShip ? "their merc isn't on this ship" : "the host isn't on the ship yet";
+                            SendShip(ShipMsg.Result, w => { w.Write(false); w.Write(why); w.Write(0); ShipSync.Write(w, new Dictionary<string, string>()); });
+                        }
+                    }
+                    break;
+                case ShipMsg.Snapshot:
+                    if (_role == Role.Client)
+                    {
+                        int version = r.ReadInt32();
+                        ApplyShipSnapshot(version, ShipSync.Read(r));
+                    }
+                    break;
+                case ShipMsg.Change:
+                    if (_role == Role.Host)
+                    {
+                        int version = r.ReadInt32();
+                        HostApplyChange(version, ShipSync.Read(r));
+                    }
+                    break;
+                case ShipMsg.Result:
+                    if (_role == Role.Client)
+                    {
+                        bool ok = r.ReadBoolean();
+                        string reason = r.ReadString();
+                        int version = r.ReadInt32();
+                        Dictionary<string, string> entries = ShipSync.Read(r);
+                        if (ok)
+                        {
+                            Notify($"Co-op: your gear is saved on {PeerName}'s ship.");
+                        }
+                        else if (entries.Count == 0)
+                        {
+                            Notify($"Co-op: couldn't sync your gear with {PeerName} ({reason}).");
+                        }
+                        else
+                        {
+                            Notify($"Co-op: {PeerName}'s game didn't take your gear changes ({reason}). Your copy shows their ship again; please redo them.");
+                        }
+                        if (entries.Count > 0)
+                        {
+                            ApplyShipSnapshot(version, entries);
+                        }
+                    }
+                    break;
+            }
+        }
+
+        // Returns false if there's nothing to send (not on the ship).
+        private static bool HostSendSnapshot()
+        {
+            State global = GetGlobalState();
+            Mercenary merc = FriendMerc(global);
+            if (!_onShip || merc == null)
+            {
+                return false;
+            }
+            _shipSent = ShipSync.Snapshot(global, merc);
+            int version = ++_shipVersion;
+            Dictionary<string, string> sent = _shipSent;
+            SendShip(ShipMsg.Snapshot, w => { w.Write(version); ShipSync.Write(w, sent); });
+            Log.Info($"Sent ship snapshot v{version} ({sent.Count} storages).");
+            return true;
+        }
+
+        // The host's side of a gear change. Public for the selftest.
+        internal static string HostApplyChange(int version, Dictionary<string, string> change)
+        {
+            _friendEditing = false;
+            State global = GetGlobalState();
+            Mercenary merc = FriendMerc(global);
+            string reason = null;
+            if (!_onShip)
+            {
+                reason = "you had already left the ship";
+            }
+            else if (merc == null)
+            {
+                reason = "their merc isn't on this ship";
+            }
+            else if (change.Count > 0)
+            {
+                if (_shipSent == null || version != _shipVersion)
+                {
+                    reason = "it started from an older copy of the ship";
+                }
+                else
+                {
+                    List<string> conflicts = ShipSync.Conflicts(_shipSent, ShipSync.Snapshot(global, merc), change);
+                    if (conflicts.Count > 0)
+                    {
+                        reason = $"the host moved items in the same storage meanwhile ({string.Join(", ", conflicts)})";
+                    }
+                }
+                if (reason == null)
+                {
+                    try
+                    {
+                        ShipSync.Load(global, merc, change);
+                        RefreshShipScreens();
+                        Log.Info($"Applied friend's gear change ({string.Join(" ", change.Keys)}).");
+                        Notify($"Co-op: {PeerName} updated {CoopSession.DisplayName(merc)}'s gear.");
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Error("Couldn't apply the friend's gear change: " + e);
+                        reason = "it couldn't be applied";
+                    }
+                }
+            }
+            else
+            {
+                return null;
+            }
+            if (reason != null)
+            {
+                Log.Warn("Refused the friend's gear change: " + reason);
+            }
+            // Either way the friend's copy goes back in line with the real ship.
+            Dictionary<string, string> fresh = new Dictionary<string, string>();
+            int freshVersion = 0;
+            if (_onShip && merc != null)
+            {
+                _shipSent = fresh = ShipSync.Snapshot(global, merc);
+                freshVersion = ++_shipVersion;
+            }
+            bool ok = reason == null;
+            string why = reason ?? "";
+            SendShip(ShipMsg.Result, w => { w.Write(ok); w.Write(why); w.Write(freshVersion); ShipSync.Write(w, fresh); });
+            return reason;
+        }
+
+        private static void ApplyShipSnapshot(int version, Dictionary<string, string> entries)
+        {
+            State global = GetGlobalState();
+            Mercenary merc = FriendMerc(global);
+            if (!_onShip || merc == null)
+            {
+                return;
+            }
+            try
+            {
+                ShipSync.Load(global, merc, entries);
+                _shipAppliedVersion = version;
+                _shipBaseline = ShipSync.Snapshot(global, merc);
+                RefreshShipScreens();
+                Log.Info($"Applied ship snapshot v{version} ({entries.Count} storages).");
+            }
+            catch (Exception e)
+            {
+                Log.Error("Couldn't apply the host's ship snapshot: " + e);
+            }
+        }
+
+        private static void RefreshShipScreens()
+        {
+            try
+            {
+                if (UI.IsShowing<ArsenalScreen>())
+                {
+                    UI.Get<ArsenalScreen>().RefreshView();
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Warn("Ship screen refresh failed: " + e.Message);
+            }
+        }
+
+        // ---------------------------------------------------------------- selftest
+
+        private static bool _shipTesting;
+
+        // Test-only (selftest=ship): the host's side of a gear change on this machine, with the
+        // friend's edits simulated on the same objects. Returns a report starting PASS or FAIL.
+        internal static string ShipSelftest(Mercenary merc)
+        {
+            State global = GetGlobalState();
+            bool onShip = _onShip;
+            string friend = _friendMercId;
+            _shipTesting = true;
+            _onShip = true;
+            _friendMercId = merc.ProfileId;
+            List<string> report = new List<string>();
+            bool ok = true;
+            void Check(bool condition, string what)
+            {
+                report.Add((condition ? "ok " : "FAILED ") + what);
+                ok &= condition;
+            }
+            Dictionary<string, string> original = ShipSync.Snapshot(global, merc);
+            try
+            {
+                MagnumCargo cargo = global.Get<MagnumCargo>();
+                Check(cargo != null, "ship cargo reachable");
+                // Wire format: written, compressed, decompressed and read back unchanged.
+                byte[] packed;
+                using (MemoryStream ms = new MemoryStream())
+                using (BinaryWriter w = new BinaryWriter(ms))
+                {
+                    ShipSync.Write(w, original);
+                    w.Flush();
+                    packed = ShipSync.Compress(ms.ToArray());
+                }
+                Dictionary<string, string> unpacked = ShipSync.Read(new BinaryReader(new MemoryStream(ShipSync.Decompress(packed))));
+                Check(unpacked.Count == original.Count && original.All(kv => unpacked[kv.Key] == kv.Value), $"wire round trip ({packed.Length} bytes compressed)");
+                // Host sends a snapshot; the friend moves an item from the cargo into their merc's pack.
+                _shipSent = ShipSync.Snapshot(global, merc);
+                _shipVersion = 1;
+                ItemStorage tab = cargo.ShipCargo.FirstOrDefault(t => !t.Empty);
+                Check(tab != null, "cargo has items");
+                BasePickupItem item = tab.Items.First();
+                tab.Remove(item);
+                bool taken = merc.CreatureData.Inventory.TakeOrEquip(item, putIfSlotBusy: true);
+                Check(taken, $"merc took {item.Id}");
+                Dictionary<string, string> after = ShipSync.Snapshot(global, merc);
+                Dictionary<string, string> change = ShipSync.Changes(_shipSent, after);
+                report.Add("change: " + string.Join(" ", change.Keys));
+                Check(change.Keys.Any(k => k.StartsWith("c")) && change.Keys.Any(k => k.StartsWith("m")), "change covers cargo and merc");
+                // Back to what the host has, then the host applies the friend's change.
+                ShipSync.Load(global, merc, _shipSent);
+                Dictionary<string, string> reverted = ShipSync.Snapshot(global, merc);
+                Check(ShipSync.Changes(_shipSent, reverted).Count == 0, "snapshot reloads unchanged: " + string.Join(" ", ShipSync.Changes(_shipSent, reverted).Keys));
+                string reason = HostApplyChange(1, change);
+                Check(reason == null, "change applied" + (reason == null ? "" : ": " + reason));
+                Dictionary<string, string> applied = ShipSync.Snapshot(global, merc);
+                Check(change.All(kv => applied[kv.Key] == kv.Value), "host now has the friend's storages");
+                Check(_shipVersion == 2 && _shipSent != null, "fresh snapshot sent");
+
+                // Stale: a change based on version 1 after version 2 went out.
+                reason = HostApplyChange(1, change);
+                Check(reason != null && reason.Contains("older"), "stale change refused: " + reason);
+
+                // Conflict: the friend puts the item back while the host takes another item from that tab.
+                Dictionary<string, string> sent2 = _shipSent;
+                int version2 = _shipVersion;
+                BasePickupItem back = merc.CreatureData.Inventory.AllContainers.Where(c => c != null).SelectMany(c => c.Items).FirstOrDefault(i => i.Id == item.Id);
+                back?.Storage?.Remove(back);
+                bool returned = back != null && tab.TryPutItem(back, CellPosition.Zero);
+                Check(returned, "friend put the item back");
+                Dictionary<string, string> change2 = ShipSync.Changes(sent2, ShipSync.Snapshot(global, merc));
+                ShipSync.Load(global, merc, sent2);
+                BasePickupItem other = tab.Items.FirstOrDefault();
+                Check(other != null, "tab has another item for the host to take");
+                if (other != null)
+                {
+                    tab.Remove(other);
+                }
+                reason = HostApplyChange(version2, change2);
+                Check(reason != null && reason.Contains("same storage"), "conflicting change refused: " + reason);
+            }
+            catch (Exception e)
+            {
+                Check(false, "exception " + e);
+            }
+            finally
+            {
+                try
+                {
+                    ShipSync.Load(global, merc, original);
+                }
+                catch (Exception e)
+                {
+                    report.Add("cleanup failed: " + e.Message);
+                }
+                _shipTesting = false;
+                _onShip = onShip;
+                _friendMercId = friend;
+                _shipSent = null;
+            }
+            return (ok ? "PASS " : "FAIL ") + string.Join("; ", report);
+        }
+
+        // ---------------------------------------------------------------- transport
+
+        // Compressed and split like the save transfer; one message per frame while Steam's buffer is full.
+        private static void SendShip(ShipMsg kind, Action<BinaryWriter> body)
+        {
+            if (_shipTesting || _loopback != Loopback.None || SteamNet.Instance == null)
+            {
+                return;
+            }
+            byte[] data;
+            using (MemoryStream ms = new MemoryStream())
+            using (BinaryWriter w = new BinaryWriter(ms))
+            {
+                w.Write((byte)kind);
+                body(w);
+                w.Flush();
+                data = ShipSync.Compress(ms.ToArray());
+            }
+            int id = ++_shipBlobId;
+            int total = Math.Max(1, (data.Length + SteamNet.MaxChunkBytes - 1) / SteamNet.MaxChunkBytes);
+            List<byte[]> chunks = new List<byte[]>(total);
+            for (int i = 0; i < total; i++)
+            {
+                int index = i, offset = i * SteamNet.MaxChunkBytes;
+                int length = Math.Min(SteamNet.MaxChunkBytes, data.Length - offset);
+                chunks.Add(Wire.Build(MsgType.ShipChunk, w =>
+                {
+                    w.Write(id);
+                    w.Write(index);
+                    w.Write(total);
+                    w.Write(length);
+                    w.Write(data, offset, length);
+                }));
+            }
+            SteamNet.Instance.StartCoroutine(SendChunks(chunks));
+        }
+
+        private static IEnumerator SendChunks(List<byte[]> chunks)
+        {
+            foreach (byte[] chunk in chunks)
+            {
+                int attempts = 0;
+                while (!SteamNet.Instance.Send(chunk))
+                {
+                    if (_phase == Phase.Idle || ++attempts > 600)
+                    {
+                        Log.Warn("Gave up sending ship data.");
+                        yield break;
+                    }
+                    yield return new WaitForSecondsRealtime(0.05f);
+                }
+            }
+        }
+
+        private static void OnShipChunk(BinaryReader r)
+        {
+            int id = r.ReadInt32(), index = r.ReadInt32(), total = r.ReadInt32(), length = r.ReadInt32();
+            if (!_shipIncoming.TryGetValue(id, out byte[][] parts))
+            {
+                parts = new byte[total][];
+                _shipIncoming[id] = parts;
+            }
+            parts[index] = r.ReadBytes(length);
+            if (parts.Any(p => p == null))
+            {
+                return;
+            }
+            _shipIncoming.Remove(id);
+            try
+            {
+                byte[] data = ShipSync.Decompress(parts.SelectMany(p => p).ToArray());
+                using (BinaryReader body = new BinaryReader(new MemoryStream(data)))
+                {
+                    OnShipMessage((ShipMsg)body.ReadByte(), body);
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Error("Bad ship message: " + e);
+            }
+        }
+    }
+}
