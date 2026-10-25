@@ -20,5 +20,6 @@ echo "sha256 $(sha256sum "$out/QuasimorphCoop.dll" | cut -d' ' -f1)"
 # The game runs under Proton, where Z: is the Linux root.
 win="Z:$(realpath "$out" | sed 's|/|\\|g')"
 echo
-echo "First upload (in-game console, backquote key):  mod_createworkshopitem $win"
-echo "Later updates:  mod_updateworkshopitem <item id> $win true"
+# Workshop item: https://steamcommunity.com/sharedfiles/filedetails/?id=3826739727
+echo "Update the Workshop item (in-game console, backquote key):"
+echo "  mod_updateworkshopitem 3826739727 $win true"

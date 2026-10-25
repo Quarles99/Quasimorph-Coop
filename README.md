@@ -46,7 +46,7 @@ grep QMCoop ~/.local/share/Steam/steamapps/compatdata/2059170/pfx/drive_c/users/
 
 Both players need the **same game version and the exact same mod build**. The host checks a hash of the DLL and refuses a mismatch. Use the same set of other mods too; a different mod list only gives a warning, but it can cause desyncs.
 
-**Install:** subscribe on the Steam Workshop (once it's published), which keeps both players on the same build automatically. Or install manually: unzip `QuasimorphCoop.zip` into
+**Install:** subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3826739727), which keeps both players on the same build automatically. Or install manually: unzip `QuasimorphCoop.zip` into
 `%USERPROFILE%\AppData\LocalLow\Magnum Scriptum Ltd\Quasimorph\LocalUserPresets\`
 so that you get `...\LocalUserPresets\QuasimorphCoop\QuasimorphCoop.dll`. Start the game once and check that the mod is listed. Don't keep both a Workshop copy and a manual copy: they have the same mod name and can conflict.
 
@@ -85,7 +85,9 @@ After every action point both games compare a fingerprint of the state (position
 
 `tools/package.sh` builds the mod and assembles the upload folder `dist/QuasimorphCoop` (manifest, DLL and `workshop/thumbnail.png`, which `tools/make_thumbnail.py` draws). It prints the console commands with the folder as a Windows path, since the game runs under Proton.
 
-1. First upload: in the game's console (backquote key), `mod_createworkshopitem <folder>`. Steam may ask you to accept the Workshop agreement first. Keep the item id it prints.
+The Workshop item is [3826739727](https://steamcommunity.com/sharedfiles/filedetails/?id=3826739727).
+
+1. First upload (done): in the game's console (backquote key), `mod_createworkshopitem <folder>`. Steam may ask you to accept the Workshop agreement first. Keep the item id it prints.
 2. On the item's Workshop page: set the title, paste `workshop/description.txt`, and choose the visibility (start with Friends-only or Hidden).
 3. Updates: `mod_updateworkshopitem <item id> <folder> true` (`true` also updates the preview image).
 
