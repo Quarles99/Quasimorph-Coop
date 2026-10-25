@@ -46,9 +46,9 @@ grep QMCoop ~/.local/share/Steam/steamapps/compatdata/2059170/pfx/drive_c/users/
 
 Both players need the **same game version and the exact same mod build**. The host checks a hash of the DLL and refuses a mismatch. Use the same set of other mods too; a different mod list only gives a warning, but it can cause desyncs.
 
-**Install for the friend (Windows):** unzip `QuasimorphCoop.zip` into
+**Install:** subscribe on the Steam Workshop (once it's published), which keeps both players on the same build automatically. Or install manually: unzip `QuasimorphCoop.zip` into
 `%USERPROFILE%\AppData\LocalLow\Magnum Scriptum Ltd\Quasimorph\LocalUserPresets\`
-so that you get `...\LocalUserPresets\QuasimorphCoop\QuasimorphCoop.dll`. Start the game once and check that the mod is listed.
+so that you get `...\LocalUserPresets\QuasimorphCoop\QuasimorphCoop.dll`. Start the game once and check that the mod is listed. Don't keep both a Workshop copy and a manual copy: they have the same mod name and can conflict.
 
 **Starting a session (no console needed):**
 1. Host: load your game. Press Esc, open **Co-op**, and click **Partner** until it shows the merc your friend will play. The choice is remembered for that save. From now on the partner joins you automatically at every mission start and floor change; this also works for local hotseat without going online.
@@ -80,6 +80,16 @@ After every action point both games compare a fingerprint of the state (position
 - **Saves.** The dungeon save has room for only one player, so the other party merc goes into a small file next to each dungeon save (`[autosave_]slot_N_coop_<location>.dat`). The merc respawns when you reload and follows you to the next floor. Only roster mercs come back; `coop_add temp` mercs are dropped.
 - **Enemies treat each merc on its own.** An invisible merc is hidden from enemies while a visible partner isn't, and curse effects on a merc (wound and infection chances, seizing shots, chaos damage) use that merc's own curse.
 - **Gear sticks immediately.** The partner's gear and wounds live on their roster entry, so changes stick even if they don't extract, as long as they're alive.
+
+## Publishing to the Steam Workshop
+
+`tools/package.sh` builds the mod and assembles the upload folder `dist/QuasimorphCoop` (manifest, DLL and `workshop/thumbnail.png`, which `tools/make_thumbnail.py` draws). It prints the console commands with the folder as a Windows path, since the game runs under Proton.
+
+1. First upload: in the game's console (backquote key), `mod_createworkshopitem <folder>`. Steam may ask you to accept the Workshop agreement first. Keep the item id it prints.
+2. On the item's Workshop page: set the title, paste `workshop/description.txt`, and choose the visibility (start with Friends-only or Hidden).
+3. Updates: `mod_updateworkshopitem <item id> <folder> true` (`true` also updates the preview image).
+
+When testing a Workshop copy, remove the local copy in `LocalUserPresets/QuasimorphCoop` (and put it back for local builds).
 
 ## Known limitations
 

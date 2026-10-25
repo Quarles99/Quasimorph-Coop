@@ -1,0 +1,34 @@
+[h1]Quasimorph Co-op[/h1]
+Play missions with a friend: two full mercs on the same map, taking turns, online over Steam or hotseat on one PC. No Remote Play: each player runs their own game and controls their own merc.
+
+[b]Experimental.[/b] Online play has been tested heavily on one machine (recorded and replayed sessions) but not yet much between two PCs. Back up your saves. Bug reports with both players' Player.log files are very welcome.
+
+[h2]How to play online[/h2]
+[olist]
+[*]Both players subscribe. You need the same game version and the same mod list.
+[*]Host: load your game, press Esc, open [b]Co-op[/b], and click [b]Partner[/b] until it shows the merc your friend will play.
+[*]Host: click [b]Host online[/b] and invite your friend.
+[*]Friend: accept the invite, or open [b]Co-op[/b] on the main menu and click [b]Join[/b].
+[/olist]
+Your friend's merc joins you at every mission start and floor change. You control your merc, your friend controls theirs.
+
+[h2]What works together[/h2]
+[list]
+[*]Moving, shooting, reloading, weapons and fire modes, doors, ultimate perks
+[*]Inventory, looting, health screen (medkits, splints, amputation), eating, repairs
+[*]Autodocs, repair and recharge stations, scanners, workbenches
+[*]Leaving by shuttle, ladders and elevators (the whole party goes)
+[*]Shared vision: the map shows what either merc sees
+[*]If one merc dies the other carries on, and you can loot the fallen
+[*]Between missions your friend equips their own merc on your ship
+[/list]
+Both games check they're in sync after every action. If they ever differ, they resync automatically within a few seconds.
+
+[h2]Good to know[/h2]
+[list]
+[*]It's the host's campaign. The friend plays in a hidden copy (slot 9), so their own saves are never touched.
+[*]Only the host starts missions and manages the ship (trading, crew, crafting); the friend manages their own merc's gear.
+[*]Hotseat without going online: pick a Partner in the Co-op menu and both mercs take turns on one PC.
+[/list]
+
+Source code and full details: [url=https://github.com/Quarles99/Quasimorph-Coop]github.com/Quarles99/Quasimorph-Coop[/url]
