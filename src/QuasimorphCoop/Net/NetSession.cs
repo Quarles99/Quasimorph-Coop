@@ -237,6 +237,7 @@ namespace QuasimorphCoop.Net
             _shipIncoming.Clear();
             _shipSent = _shipBaseline = null;
             _friendEditing = _editingOwnMerc = false;
+            _pendingShip = null;
             SteamNet.Instance?.Leave();
         }
 

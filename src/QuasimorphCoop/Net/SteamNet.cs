@@ -219,6 +219,7 @@ namespace QuasimorphCoop.Net
                 JoinPendingLobby();
             }
             NetSession.Update();
+            NetSession.ShipTick();
             // Keep the session from idling out while someone sits in a menu.
             if (HasPeer && NetSession.Engaged && Time.realtimeSinceStartup - _lastSend > 10f)
             {

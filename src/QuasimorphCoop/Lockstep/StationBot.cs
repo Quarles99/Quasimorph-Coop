@@ -172,12 +172,17 @@ namespace QuasimorphCoop.Lockstep
         }
     }
 
-    // Lets the harness see a level end however it ends.
+    // Lets the harness see a level end however it ends. During a test the level isn't really
+    // finished: that would save the result (an extraction, a dead merc) over the test slot.
     [HarmonyPatch(typeof(DungeonGameMode), "FinishGame")]
     internal static class FinishGameProbe
     {
         public static string Reason;
 
-        private static void Prefix(DungeonFinishedData dungeonFinishedData) => Reason ??= dungeonFinishedData.Reason.ToString();
+        private static bool Prefix(DungeonFinishedData dungeonFinishedData)
+        {
+            Reason ??= dungeonFinishedData.Reason.ToString();
+            return !LockstepTest.Active;
+        }
     }
 }

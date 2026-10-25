@@ -86,5 +86,5 @@ After every action point both games compare a fingerprint of the state (position
 - **Untested between two real PCs.** Everything online has been tested with recorded-and-replayed sessions on one machine and with selftests, not yet with a friend. That includes the ship: the host's side of a gear change is tested, the friend's screens and the Steam transfer are not.
 - **Rare desync.** In one recent test session the two copies of a fight came out differently (an enemy shot killed a merc in one and not the other). A rerun with the same settings didn't repeat it. Auto-resync recovers from it.
 - **Ship: only the friend's merc's gear.** The rest of the ship is the host's (see above).
-- **Workbench crafting** is synced but untested; the test map has no workbench.
+- **Synced but not yet exercised by a test:** workbench crafting, the shuttle's ship-cargo and shuttle-cargo tabs (the test map has neither a workbench nor a shuttle), closing a station menu on the watching player's screen, and joining while the host is on the ship.
 - **Minor enemy details.** The "enemy nearby" signal through walls and the more precise enemy pathfinding near the player use the merc whose turn it is. Neither changes who enemies see or shoot.

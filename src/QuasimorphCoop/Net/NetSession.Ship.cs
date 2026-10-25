@@ -32,6 +32,11 @@ namespace QuasimorphCoop.Net
         private static Dictionary<string, string> _shipBaseline;
         private static bool _editingOwnMerc;
 
+        // A snapshot that arrived while an item was being dragged. A held item is in no storage,
+        // so loading then would put it back in its storage while the drag still drops a copy.
+        private static Dictionary<string, string> _pendingShip;
+        private static int _pendingShipVersion;
+
         private static bool ShipHost => _role == Role.Host && _phase >= Phase.Connected && _loopback == Loopback.None;
 
         private static bool ShipClient => _role == Role.Client && _phase == Phase.Connected && _loopback == Loopback.None && _onShip;
@@ -73,6 +78,7 @@ namespace QuasimorphCoop.Net
         private static void OnShipLeft()
         {
             _editingOwnMerc = false;
+            _pendingShip = null;
             if (_role == Role.Host && _friendEditing)
             {
                 Log.Info("Left the ship while the friend was still editing.");
@@ -311,12 +317,42 @@ namespace QuasimorphCoop.Net
             return reason;
         }
 
+        // Per frame.
+        public static void ShipTick()
+        {
+            if (_pendingShip != null && !Dragging())
+            {
+                Dictionary<string, string> entries = _pendingShip;
+                _pendingShip = null;
+                ApplyShipSnapshot(_pendingShipVersion, entries);
+            }
+        }
+
+        private static bool Dragging()
+        {
+            try
+            {
+                return UI.Drag != null && UI.Drag.IsDragging;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         private static void ApplyShipSnapshot(int version, Dictionary<string, string> entries)
         {
             State global = GetGlobalState();
             Mercenary merc = FriendMerc(global);
             if (!_onShip || merc == null)
             {
+                return;
+            }
+            if (Dragging())
+            {
+                _pendingShip = entries;
+                _pendingShipVersion = version;
+                Log.Info($"Ship snapshot v{version} waits for the drag to end.");
                 return;
             }
             try
@@ -351,6 +387,8 @@ namespace QuasimorphCoop.Net
         // ---------------------------------------------------------------- selftest
 
         private static bool _shipTesting;
+        private static string _equipTestItem;
+
 
         // Test-only (selftest=ship): the host's side of a gear change on this machine, with the
         // friend's edits simulated on the same objects. Returns a report starting PASS or FAIL.
@@ -429,6 +467,57 @@ namespace QuasimorphCoop.Net
                 }
                 reason = HostApplyChange(version2, change2);
                 Check(reason != null && reason.Contains("same storage"), "conflicting change refused: " + reason);
+
+                // Equipment: the friend puts a vest or backpack on from the cargo (it changes the
+                // grids) and takes it off again, in whichever order the merc's gear allows.
+                ShipSync.Load(global, merc, original);
+                Inventory inv = merc.CreatureData.Inventory;
+                ItemStorage slot = null;
+                bool wearing = false;
+                foreach (ItemStorage candidate in new[] { inv.VestSlot, inv.BackpackSlot })
+                {
+                    ItemStorage grid = candidate == inv.VestSlot ? inv.VestStore : inv.BackpackStore;
+                    if (!candidate.Empty && grid.Empty)
+                    {
+                        slot = candidate;
+                        wearing = true;
+                        _equipTestItem = candidate.Items.First().Id;
+                        break;
+                    }
+                    bool vest = candidate == inv.VestSlot;
+                    BasePickupItem spare = candidate.Empty ? cargo.ShipCargo.SelectMany(t => t.Items).FirstOrDefault(i => vest ? i.Is<VestRecord>() : i.Is<BackpackRecord>()) : null;
+                    if (spare != null)
+                    {
+                        slot = candidate;
+                        _equipTestItem = spare.Id;
+                        break;
+                    }
+                }
+                Check(slot != null, "a vest or backpack to put on or take off");
+                for (int step = 0; slot != null && step < 2; step++)
+                {
+                    bool takeOff = wearing;
+                    _shipSent = ShipSync.Snapshot(global, merc);
+                    int version = ++_shipVersion;
+                    Dictionary<string, string> sent = _shipSent;
+                    BasePickupItem gear = takeOff ? slot.Items.FirstOrDefault() : cargo.ShipCargo.SelectMany(t => t.Items).LastOrDefault(i => i.Id == _equipTestItem);
+                    if (gear == null)
+                    {
+                        Check(false, (takeOff ? "gear to take off" : "gear to put on") + " found");
+                        break;
+                    }
+                    gear.Storage.Remove(gear);
+                    bool moved = takeOff ? cargo.ShipCargo.Any(t => t.TryPutItem(gear, CellPosition.Zero)) : slot.TryPutItem(gear, CellPosition.Zero);
+                    Check(moved, (takeOff ? "took off " : "put on ") + gear.Id);
+                    Dictionary<string, string> edited = ShipSync.Snapshot(global, merc);
+                    Dictionary<string, string> equipChange = ShipSync.Changes(sent, edited);
+                    ShipSync.Load(global, merc, sent);
+                    reason = HostApplyChange(version, equipChange);
+                    Dictionary<string, string> result = ShipSync.Snapshot(global, merc);
+                    Check(reason == null && result.Count == edited.Count && edited.All(kv => result.TryGetValue(kv.Key, out string v) && v == kv.Value),
+                        $"host matches after {(takeOff ? "unequip" : "equip")} ({string.Join(" ", equipChange.Keys)}){(reason == null ? "" : ": " + reason)}");
+                    wearing = !wearing;
+                }
             }
             catch (Exception e)
             {

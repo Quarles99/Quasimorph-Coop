@@ -62,17 +62,28 @@ namespace QuasimorphCoop.Patches
         private static readonly FieldInfo SlotField = AccessTools.Field(typeof(Creatures), nameof(Creatures.Player));
         private static readonly MethodInfo MercenaryGetter = AccessTools.PropertyGetter(typeof(Player), nameof(Player.Mercenary));
         private static readonly MethodInfo Self = AccessTools.Method(typeof(OwnMercenaryPatch), nameof(MercFor));
-
-        private static Player MercFor(Creatures creatures, Creature self) =>
-            CoopSession.Active && self is Player p && p.Mercenary != null ? p : creatures.Player;
+        // Stands in for `creature._creatures.Player`.
+        private static Player MercFor(Creature creature, Creatures creatures) =>
+            CoopSession.Active && creature is Player p && p.Mercenary != null ? p : creatures.Player;
 
         private static IEnumerable<MethodBase> TargetMethods()
         {
+            List<MethodBase> found = FindTargets().ToList();
+            Log.Info($"Own-mercenary patch covers {found.Count} methods: {string.Join(", ", found.Select(m => m.DeclaringType.Name + "." + m.Name))}.");
+            return found;
+        }
+
+        // Methods of Creature and Player, and the bodies of their coroutines (shooting runs in one).
+        private static IEnumerable<MethodBase> FindTargets()
+        {
+            const BindingFlags all = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
             foreach (System.Type type in new[] { typeof(Creature), typeof(Player) })
             {
-                foreach (MethodInfo m in type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                IEnumerable<MethodInfo> methods = type.GetMethods(all)
+                    .Concat(type.GetNestedTypes(BindingFlags.NonPublic).Where(t => t.Name.StartsWith("<")).Select(t => t.GetMethod("MoveNext", all)).Where(m => m != null));
+                foreach (MethodInfo m in methods)
                 {
-                    if (m.GetMethodBody() == null || m.IsGenericMethodDefinition)
+                    if (m.GetMethodBody() == null || m.IsGenericMethodDefinition || m.DeclaringType.IsGenericTypeDefinition)
                     {
                         continue;
                     }
@@ -93,13 +104,13 @@ namespace QuasimorphCoop.Patches
             }
         }
 
-        // `this._creatures.Player` whose Mercenary is read within the next few instructions (the
-        // gap covers `?.`).
+        // `<creature>._creatures.Player` whose Mercenary is read within the next few instructions
+        // (the gap covers `?.`). Returns the index of the `ldfld Player`.
         private static IEnumerable<int> Matches(List<CodeInstruction> code)
         {
-            for (int i = 2; i < code.Count; i++)
+            for (int i = 1; i < code.Count; i++)
             {
-                if (code[i].LoadsField(SlotField) && code[i - 1].LoadsField(CreaturesField) && code[i - 2].IsLdarg(0)
+                if (code[i].LoadsField(SlotField) && code[i - 1].LoadsField(CreaturesField)
                     && code.Skip(i + 1).Take(6).Any(c => c.Calls(MercenaryGetter)))
                 {
                     yield return i;
@@ -112,10 +123,10 @@ namespace QuasimorphCoop.Patches
             List<CodeInstruction> code = instructions.ToList();
             foreach (int i in Matches(code).Reverse().ToList())
             {
-                // creatures on the stack -> MercFor(creatures, this)
-                CodeInstruction load = code[i];
-                code[i] = new CodeInstruction(OpCodes.Ldarg_0).MoveLabelsFrom(load);
-                code.Insert(i + 1, new CodeInstruction(OpCodes.Call, Self));
+                // creature on the stack: `ldfld _creatures; ldfld Player` -> `dup; ldfld _creatures; call MercFor(creature, creatures)`
+                code[i] = new CodeInstruction(OpCodes.Call, Self).MoveLabelsFrom(code[i]);
+                CodeInstruction dup = new CodeInstruction(OpCodes.Dup).MoveLabelsFrom(code[i - 1]);
+                code.Insert(i - 1, dup);
             }
             return code;
         }

@@ -110,6 +110,18 @@ namespace QuasimorphCoop.Net
         internal static T Global<T>(State state) where T : class => state.Get<T>() ?? NetSession.GetGlobalState()?.Get<T>();
 
         internal static void Write(BinaryWriter w, MapObstacleComponent station) => w.Write(station.MapObstacle.UniqueId);
+
+        // OpPatch.Begin, telling the player why a button did nothing. Station windows can stay open
+        // past the merc's action point, and their buttons don't check whose turn it is.
+        internal static bool Begin(InventoryOp op, Action<BinaryWriter, State> args, out bool recorded)
+        {
+            bool allowed = OpPatch.Begin(op, args, out recorded);
+            if (!allowed && !NetSession.WatchingOther)
+            {
+                NetSession.Notify("Co-op: station menus work on your merc's turn.");
+            }
+            return allowed;
+        }
     }
 
     // ------------------------------------------------------------------------ capture patches
@@ -118,7 +130,7 @@ namespace QuasimorphCoop.Net
     internal static class HealHPOpPatch
     {
         private static bool Prefix(HealStation __instance, out bool __state) =>
-            OpPatch.Begin(InventoryOp.HealHP, (w, s) => StationOps.Write(w, __instance), out __state);
+            StationOps.Begin(InventoryOp.HealHP, (w, s) => StationOps.Write(w, __instance), out __state);
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);
     }
@@ -127,7 +139,7 @@ namespace QuasimorphCoop.Net
     internal static class HealWoundsOpPatch
     {
         private static bool Prefix(HealStation __instance, out bool __state) =>
-            OpPatch.Begin(InventoryOp.HealWounds, (w, s) => StationOps.Write(w, __instance), out __state);
+            StationOps.Begin(InventoryOp.HealWounds, (w, s) => StationOps.Write(w, __instance), out __state);
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);
     }
@@ -136,7 +148,7 @@ namespace QuasimorphCoop.Net
     internal static class RechargeOpPatch
     {
         private static bool Prefix(RechargeStation __instance, out bool __state) =>
-            OpPatch.Begin(InventoryOp.Recharge, (w, s) => StationOps.Write(w, __instance), out __state);
+            StationOps.Begin(InventoryOp.Recharge, (w, s) => StationOps.Write(w, __instance), out __state);
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);
     }
@@ -145,7 +157,7 @@ namespace QuasimorphCoop.Net
     internal static class RepairAllOpPatch
     {
         private static bool Prefix(RepairStation __instance, out bool __state) =>
-            OpPatch.Begin(InventoryOp.RepairAll, (w, s) => StationOps.Write(w, __instance), out __state);
+            StationOps.Begin(InventoryOp.RepairAll, (w, s) => StationOps.Write(w, __instance), out __state);
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);
     }
@@ -158,7 +170,7 @@ namespace QuasimorphCoop.Net
         private static bool Prefix(BaseMapObstacleWindow __instance, out bool __state)
         {
             MapObstacle obstacle = ObstacleField(__instance);
-            return OpPatch.Begin(InventoryOp.Battery, (w, s) => w.Write(obstacle.UniqueId), out __state);
+            return StationOps.Begin(InventoryOp.Battery, (w, s) => w.Write(obstacle.UniqueId), out __state);
         }
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);
@@ -187,7 +199,7 @@ namespace QuasimorphCoop.Net
             }
             string receiptId = panel.Receipt.Id;
             int count = UI.Get<CommonContextMenu>().SliderButtonSelectedValue;
-            return OpPatch.Begin(InventoryOp.Craft, (w, s) => { w.Write(workbench.MapObstacle.UniqueId); w.Write(receiptId); w.Write(count); }, out __state);
+            return StationOps.Begin(InventoryOp.Craft, (w, s) => { w.Write(workbench.MapObstacle.UniqueId); w.Write(receiptId); w.Write(count); }, out __state);
         }
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);
