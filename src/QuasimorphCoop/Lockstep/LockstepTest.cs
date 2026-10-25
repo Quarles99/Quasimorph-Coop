@@ -35,6 +35,9 @@ namespace QuasimorphCoop.Lockstep
         private float _startTime;
         private int _attemptsThisAp;
         private TurnController _turnController;
+        private InventoryBot _inventoryBot;
+        private int _inventoryEvery;
+        private int _inventoryDoneAt = -1;
 
         public static bool Active => _instance != null;
 
@@ -169,9 +172,16 @@ namespace QuasimorphCoop.Lockstep
             UnityEngine.Random.InitState(seed);
             GameplayRng.Reset(seed);
             _botRng = new System.Random(seed);
+            // inv=N: every Nth player action point starts with an inventory/health screen action.
+            _inventoryEvery = int.Parse(Get("inv", "0"), CultureInfo.InvariantCulture);
+            if (_inventoryEvery > 0)
+            {
+                _inventoryBot = new InventoryBot(Append, _botRng);
+            }
 
             _turnController = state.Get<TurnController>();
             SpawnTestMonsters(state);
+            GiveTestGear(state);
 
             // net=record|play routes the bot's inputs through the real netcode via a file.
             string net = Get("net", "none");
@@ -211,6 +221,34 @@ namespace QuasimorphCoop.Lockstep
             }
         }
 
+        // gear=id,id,...: every party merc gets these items (so the inventory bot has something to
+        // work with). corpse=mob: a monster of that class dies next to the primary merc, to loot.
+        private void GiveTestGear(State state)
+        {
+            foreach (string id in Get("gear", "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                foreach (Player p in CoopSession.Party)
+                {
+                    BasePickupItem item = SingletonMonoBehaviour<ItemFactory>.Instance.CreateForInventory(id.Trim());
+                    bool taken = item != null && p.CreatureData.Inventory.TakeOrEquip(item, putIfSlotBusy: true);
+                    Append($"gear P{p.CreatureData.UniqueId} {id}: {(taken ? "ok" : "failed")}");
+                }
+            }
+            string corpse = Get("corpse", "");
+            if (corpse.Length > 0 && CoopSession.FindFreeCellNear(CoopSession.Primary.CreatureData.Position, out CellPosition pos))
+            {
+                Monster monster = CreatureSystem.SpawnMonsterFromMobClass(state.Get<Mercenaries>(), state.Get<PerkFactory>(), state.Get<Difficulty>(),
+                    state.Get<Creatures>(), state.Get<RaidMetadata>(), _turnController, corpse, pos, -1, spawnEquipment: true, -1, isLeader: false, 5);
+                if (monster != null)
+                {
+                    monster.CreatureData.Health.SetInvulnerability(val: false);
+                    monster.CreatureData.Health.ReasonOfDeath = HealthInfo.DeathReason.Exploded;
+                    monster.CreatureData.Health.Value = 0;
+                }
+                Append($"corpse {corpse} id={monster?.CreatureData.UniqueId} at {pos.X},{pos.Y}");
+            }
+        }
+
         private void OnActionPointProcessed(ITurnable turnable)
         {
             State state = CoopSession.State;
@@ -220,13 +258,41 @@ namespace QuasimorphCoop.Lockstep
             }
             _apSeq++;
             _attemptsThisAp = 0;
+            // rngtrace=from-to: log simulation scopes that drew random numbers in that AP range.
+            string[] trace = Get("rngtrace", "").Split('-');
+            if (trace.Length == 2)
+            {
+                bool on = _apSeq >= int.Parse(trace[0], CultureInfo.InvariantCulture) && _apSeq <= int.Parse(trace[1], CultureInfo.InvariantCulture);
+                GameplayRng.Trace = on ? (Action<string>)(line => Append($"  ap{_apSeq} f{Time.frameCount} {line}")) : null;
+            }
             _lastApTime = Time.realtimeSinceStartup;
             string who = turnable is Creature c ? $"{(turnable is Player ? "P" : "M")}{c.CreatureData.UniqueId}" : turnable?.GetType().Name ?? "null";
             string description = StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber);
-            Append($"{_apSeq} {who} {StateHash.Hash(description)} {description}");
+            Append($"{_apSeq} {who} {StateHash.Hash(description)} {description}{JsonDigest()}");
             if (turnable is Player)
             {
                 _playerAps++;
+            }
+        }
+
+        // jsondump=1: per party merc, a hash of every carried storage in save format (catches item
+        // differences the regular fingerprint doesn't look at). Random state is restored afterwards.
+        private string JsonDigest()
+        {
+            if (Get("jsondump", "0") != "1")
+            {
+                return "";
+            }
+            UnityEngine.Random.State rng = UnityEngine.Random.state;
+            try
+            {
+                return " json" + string.Concat(CoopSession.Party.Select(p => ":" + p.CreatureData.UniqueId + "=" + StateHash.Hash(
+                    string.Join("|", p.CreatureData.Inventory.AllContainers.Select(c => c == null ? "-" : SaveToJSON.CreateNode(c).ToString()))).Substring(0, 8)));
+                // (Weapon InstanceIds from the save are the same on both runs; test gear gets numbered ones.)
+            }
+            finally
+            {
+                UnityEngine.Random.state = rng;
             }
         }
 
@@ -252,11 +318,12 @@ namespace QuasimorphCoop.Lockstep
                 Finish("DONE party dead");
                 return;
             }
-            if (now - _lastApTime > 60f)
+            // Playback has nothing to wait for but the recording, so give up sooner.
+            if (now - _lastApTime > (Get("net", "none") == "play" ? 25f : 60f))
             {
                 var views = Traverse.Create(SingletonMonoBehaviour<UI>.Instance).Field("_showingViews").GetValue<IEnumerable>();
                 string showing = string.Join(",", views.Cast<object>().Select(v => Traverse.Create(v).Field("View").GetValue()?.GetType().Name));
-                Finish($"STALL no AP for 60s; current={_turnController.CurrentProcessable?.GetType().Name} showing=[{showing}]");
+                Finish($"STALL no AP for {now - _lastApTime:0}s; current={_turnController.CurrentProcessable?.GetType().Name} showing=[{showing}]");
                 return;
             }
             if (_botEnabled)
@@ -273,12 +340,18 @@ namespace QuasimorphCoop.Lockstep
             State state = CoopSession.State;
             Creatures creatures = state.Get<Creatures>();
             PlayerCommandQueue queue = state.Get<PlayerCommandQueue>();
-            if (!TurnSystem.CanProcessPlayerTurn(_turnController, state.Get<TurnMetadata>(), creatures) || !queue.Empty
+            if (!TurnSystem.CanProcessPlayerTurn(_turnController, state.Get<TurnMetadata>(), creatures) || !creatures.Player.IsProcessing || !queue.Empty
                 || UI.IsAnyShowing(typeof(DungeonHudScreen)))
             {
                 return;
             }
             Player player = creatures.Player;
+            if (_inventoryBot != null && _inventoryDoneAt != _apSeq && _playerAps % _inventoryEvery == 0)
+            {
+                _inventoryDoneAt = _apSeq;
+                _inventoryBot.Act(state, player);
+                return;
+            }
             if (++_attemptsThisAp > 3)
             {
                 Append($"bot skip P{player.CreatureData.UniqueId}");

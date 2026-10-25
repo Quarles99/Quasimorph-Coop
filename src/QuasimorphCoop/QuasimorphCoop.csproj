@@ -36,6 +36,7 @@
     <Reference Include="UnityEngine.ImageConversionModule" HintPath="$(QuasimorphManaged)/UnityEngine.ImageConversionModule.dll" Private="false" />
     <Reference Include="netstandard" HintPath="$(QuasimorphManaged)/netstandard.dll" Private="false" />
     <Reference Include="com.rlabrecque.steamworks.net" HintPath="$(QuasimorphManaged)/com.rlabrecque.steamworks.net.dll" Private="false" />
+    <Reference Include="SimpleJSON" HintPath="$(QuasimorphManaged)/SimpleJSON.dll" Private="false" />
   </ItemGroup>
 
   <ItemGroup>

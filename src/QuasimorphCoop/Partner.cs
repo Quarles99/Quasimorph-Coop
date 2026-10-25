@@ -39,9 +39,12 @@ namespace QuasimorphCoop
         {
             Mercenary deployed = CoopSession.InDungeon ? CoopSession.Primary?.Mercenary : null;
             return state.Get<Mercenaries>().Values
-                .Where(m => m != null && m != deployed && m.CreatureData?.Health != null && m.CreatureData.Health.Alive)
+                .Where(m => m != null && m != deployed && IsAvailable(m))
                 .ToList();
         }
+
+        // Alive and not busy on the ship (cloning, healing, training).
+        public static bool IsAvailable(Mercenary m) => m.CreatureData?.Health != null && m.CreatureData.Health.Alive && m.State == MercenaryState.None;
 
         // Called at every level start (after any party restored from a save) and when the partner
         // is picked mid-level.
@@ -58,14 +61,14 @@ namespace QuasimorphCoop
                 return;
             }
             Mercenary mercenary = state.Get<Mercenaries>().Get(id);
-            if (mercenary == null || mercenary.CreatureData?.Health == null || !mercenary.CreatureData.Health.Alive)
-            {
-                Net.NetSession.Notify($"Co-op: partner {CoopSession.DisplayName(mercenary)} isn't available (dead or gone). Pick another in the Co-op menu.");
-                return;
-            }
             if (mercenary == CoopSession.Primary.Mercenary)
             {
                 Net.NetSession.Notify("Co-op: you deployed your partner merc yourself, so no partner joins this mission.");
+                return;
+            }
+            if (mercenary == null || !IsAvailable(mercenary))
+            {
+                Net.NetSession.Notify($"Co-op: partner {CoopSession.DisplayName(mercenary)} isn't available (dead, gone, or busy on the ship). Pick another in the Co-op menu.");
                 return;
             }
             if (!CoopSession.FindFreeCellNear(CoopSession.Primary.CreatureData.Position, out CellPosition position))

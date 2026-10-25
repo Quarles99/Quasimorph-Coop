@@ -2,7 +2,7 @@
 
 An experimental mod that adds a second player-controlled merc to Quasimorph missions, with the goal of eventual online co-op.
 
-**Status: milestone 2 (online, first pass).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Online play is new and has only been tested on one machine so far.
+**Status: milestone 2 (online, first pass).** Two full mercs (class, perks, implants, wounds, inventory) share one mission and take turns, either on one PC (hotseat) or online over Steam with a friend. Online play is new and has only been tested on one machine so far (recorded and replayed sessions).
 
 ## How it works
 
@@ -59,14 +59,26 @@ so that you get `...\LocalUserPresets\QuasimorphCoop\QuasimorphCoop.dll`. Start 
 
 **Leave co-op** in the same menu ends the session; the mission continues as local hotseat. Going back to the main menu also ends it. The console commands (`coop_add`, `coop_host`, `coop_join <lobbyid>`, `coop_leave`, `coop_net`) still exist for troubleshooting.
 
-**What's synced:** moving, shooting, reload key, swapping weapons and fire modes, movement speed, skip turn, facing, doors, ultimate perks. After every action point both games compare a fingerprint of the state (positions, facing, HP, inventory counts, weapon). If they ever differ, both get a "went out of sync" message and the details go to `Player.log`.
+**What's synced:** moving, shooting, reloading (key, HUD or dragging ammo onto a gun), swapping weapons and fire modes, movement speed, skip turn, facing, doors, ultimate perks, and everything in the inventory, loot and health screens: picking up, dropping, equipping, looting corpses and containers, eating and drinking, medkits and splints, amputation, repairs, unloading, splitting and sorting.
 
-**Not synced yet:** picking up items and looting (blocked during a session), inventory and health screens (using them causes a desync), and reloading with a chosen ammo type (blocked). Between levels (on the ship) nothing is synced; the friend's game just waits. The friend plays in a copy of the host's world, so nothing carries back to the friend's own save yet.
+How the inventory part works: while your merc acts, your game watches every item storage it can reach (its own gear, the floor, nearby corpses and containers). When one changes, the new contents go to the other game in the game's own save format. Actions with effects beyond items (eating, medkits, repairs, reloads) are replayed as the same calls on the other game.
 
-## Known limitations (milestone 1)
+During the other player's turn you watch their merc. You can open the inventory and health screens to look at their gear, but not change anything.
 
-- **Party saves use a side file.** The dungeon save has room for only one player, so party mercs are stored in a small file next to each dungeon save (`[autosave_]slot_N_coop_<location>.dat`). They respawn when you reload, and follow you to the next floor next to your merc. Only roster mercs come back; `coop_add temp` mercs are dropped. Saves made before this feature have no side file, so re-add the merc once.
-- **Second merc's state persists immediately.** Their `Mercenary` data is shared with the roster, so gear and wounds stick whether or not they extract. If they die, their roster entry is left dead and untested.
-- **Mission result follows the primary merc.** If the primary dies and the second merc extracts, the mission resolves as the primary's.
-- **Fog of war.** It shows only the active merc's vision.
+After every action point both games compare a fingerprint of the state (positions, facing, HP, every carried item, the gameplay random number generator). **If they ever differ, the host's game sends its level again and both reload it** (a few seconds), and play carries on. If that keeps happening, you get a message to send both `Player.log` files to the mod author.
+
+**Between levels:** when a level ends, the friend's game waits; the next level loads by itself when the host starts it. The ship isn't shared, so only the host manages the ship, crew and cargo. The friend plays in a copy of the host's campaign (hidden slot 9), so nothing carries back to the friend's own saves. That's by design: it's the host's campaign.
+
+## How the party behaves
+
+- **Shared vision.** The map shows everything any party merc can see, and an enemy seen by either merc counts as spotted.
+- **Deaths.** If one merc dies the other carries on, and you can loot the fallen merc's corpse. If your deployed merc dies, the survivor becomes the deployed merc, so extracting with them is a normal successful extraction. Back on the ship, a merc who died gets the game's usual treatment for your difficulty (gear-loss penalty, then cloning or permadeath). If both die, the game's normal death screen follows.
+- **Saves.** The dungeon save has room for only one player, so the other party merc goes into a small file next to each dungeon save (`[autosave_]slot_N_coop_<location>.dat`). The merc respawns when you reload and follows you to the next floor. Only roster mercs come back; `coop_add temp` mercs are dropped.
+- **Gear sticks immediately.** The partner's gear and wounds live on their roster entry, so changes stick even if they don't extract, as long as they're alive.
+
+## Known limitations
+
+- **Untested between two real PCs.** Everything online has been tested with a recorded-and-replayed session on one machine, not yet with a friend.
+- **The ship isn't shared** (see above).
+- **Autodoc and scanner popups** (the options window on heal stations and scanners) aren't synced. Using one during an online session causes a resync.
 - **AI details.** A few AI checks that read `Creatures.Player` directly (curse-based enemy regen, invisibility) use whichever merc is active.

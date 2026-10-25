@@ -37,12 +37,14 @@ namespace QuasimorphCoop.Net
         ChangeDirection
     }
 
-    // One recorded player input: either a queued ICommand or a direct action.
+    // One recorded player input: a queued ICommand, a direct action, or an inventory op.
     internal sealed class NetEntry
     {
         public ICommand Command;
         public DirectAction Action;
         public int Arg;
+        public InventoryOp Op;
+        public byte[] Data;      // the op's arguments, already encoded
     }
 
     internal static class Wire
@@ -64,7 +66,7 @@ namespace QuasimorphCoop.Net
     // objects are written as ids and resolved on the other machine.
     internal static class CommandCodec
     {
-        private const byte TNull = 0, TInt = 1, TBool = 2, TString = 3, TCell = 4, TEnum = 5, TCreature = 6, TObstacle = 7, TDoor = 8, TFloat = 9;
+        private const byte TNull = 0, TInt = 1, TBool = 2, TString = 3, TCell = 4, TEnum = 5, TCreature = 6, TObstacle = 7, TDoor = 8, TFloat = 9, TItem = 10, TShort = 11;
 
         private static readonly Dictionary<string, Type> CommandTypes = typeof(ICommand).Assembly.GetTypes()
             .Where(t => typeof(ICommand).IsAssignableFrom(t) && t.IsClass && !t.IsAbstract)
@@ -72,8 +74,29 @@ namespace QuasimorphCoop.Net
 
         private static FieldInfo[] Fields(Type t) => t.GetFields(BindingFlags.Instance | BindingFlags.Public).OrderBy(f => f.Name).ToArray();
 
-        public static void WriteEntry(BinaryWriter w, NetEntry e)
+        // Entries are encoded when recorded (item references must name the item where it is at that
+        // moment) and decoded just before they're replayed, after the entries before them.
+        public static byte[] Encode(NetEntry e)
         {
+            using (MemoryStream ms = new MemoryStream())
+            using (BinaryWriter w = new BinaryWriter(ms))
+            {
+                WriteEntry(w, e);
+                w.Flush();
+                return ms.ToArray();
+            }
+        }
+
+        private static void WriteEntry(BinaryWriter w, NetEntry e)
+        {
+            if (e.Op != 0)
+            {
+                w.Write((byte)2);
+                w.Write((byte)e.Op);
+                w.Write(e.Data.Length);
+                w.Write(e.Data);
+                return;
+            }
             if (e.Command == null)
             {
                 w.Write((byte)0);
@@ -95,9 +118,15 @@ namespace QuasimorphCoop.Net
 
         public static NetEntry ReadEntry(BinaryReader r, State state)
         {
-            if (r.ReadByte() == 0)
+            byte kind = r.ReadByte();
+            if (kind == 0)
             {
                 return new NetEntry { Action = (DirectAction)r.ReadByte(), Arg = r.ReadInt32() };
+            }
+            if (kind == 2)
+            {
+                InventoryOp op = (InventoryOp)r.ReadByte();
+                return new NetEntry { Op = op, Data = r.ReadBytes(r.ReadInt32()) };
             }
             string typeName = r.ReadString();
             if (!CommandTypes.TryGetValue(typeName, out Type type))
@@ -126,6 +155,7 @@ namespace QuasimorphCoop.Net
             {
                 case null: w.Write(TNull); break;
                 case int i: w.Write(TInt); w.Write(i); break;
+                case short sh: w.Write(TShort); w.Write(sh); break;
                 case bool b: w.Write(TBool); w.Write(b); break;
                 case float fl: w.Write(TFloat); w.Write(fl); break;
                 case string s: w.Write(TString); w.Write(s); break;
@@ -134,6 +164,7 @@ namespace QuasimorphCoop.Net
                 case Creature cr: w.Write(TCreature); w.Write(cr.CreatureData.UniqueId); break;
                 case Door d: w.Write(TDoor); w.Write(d.MapObstacle.UniqueId); break;
                 case MapObstacle o: w.Write(TObstacle); w.Write(o.UniqueId); break;
+                case BasePickupItem item: w.Write(TItem); ItemSync.WriteItem(w, CoopSession.State, item); break;
                 default: throw new NotSupportedException("Can't send command field of type " + v.GetType().FullName);
             }
         }
@@ -153,6 +184,8 @@ namespace QuasimorphCoop.Net
                 case TCreature: return state.Get<Creatures>().GetCreature(r.ReadInt32());
                 case TObstacle: return state.Get<MapObstacles>().Get(r.ReadInt32());
                 case TDoor: return state.Get<MapObstacles>().Get(r.ReadInt32())?.Door;
+                case TItem: return ItemSync.ReadItem(r, state);
+                case TShort: return r.ReadInt16();
                 default: throw new InvalidDataException("Unknown field tag " + tag);
             }
         }

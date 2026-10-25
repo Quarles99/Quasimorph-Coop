@@ -16,5 +16,7 @@ namespace QuasimorphCoop.Patches
                 CoopSession.MakeActive(__instance, "turn");
             }
         }
+
+        private static void Postfix(Player __instance) => Net.NetSession.OnActionPointStarted(__instance);
     }
 }

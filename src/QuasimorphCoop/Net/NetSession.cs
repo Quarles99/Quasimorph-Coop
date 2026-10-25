@@ -27,7 +27,7 @@ namespace QuasimorphCoop.Net
     //    exchange a state hash to catch desyncs.
     internal static class NetSession
     {
-        public const string ProtocolVersion = "2";
+        public const string ProtocolVersion = "3";
 
         private enum Role { None, Host, Client }
 
@@ -40,11 +40,17 @@ namespace QuasimorphCoop.Net
             public byte[] Payload;
         }
 
+        private sealed class Recorded
+        {
+            public NetEntry Entry;
+            public byte[] Bytes;
+        }
+
         private static Role _role;
         private static Phase _phase;
 
         private static int _apSeq;
-        private static readonly List<NetEntry> _outbox = new List<NetEntry>();
+        private static readonly List<Recorded> _outbox = new List<Recorded>();
         private static int _outboxApSeq;
         private static readonly Queue<Batch> _inbox = new Queue<Batch>();
         private static TurnController _subscribed;
@@ -53,6 +59,9 @@ namespace QuasimorphCoop.Net
         private static readonly Dictionary<int, KeyValuePair<string, string>> _remoteHashes = new Dictionary<int, KeyValuePair<string, string>>();
         private static readonly Dictionary<int, string> _localDescriptions = new Dictionary<int, string>();
         private static bool _desyncReported;
+        private static bool _resyncPending;
+        private static int _resyncs;
+        private static float _nextItemCheck;
 
         private static readonly Dictionary<string, byte[][]> _incoming = new Dictionary<string, byte[][]>();
         private static Dictionary<string, byte[]> _pendingWorld;
@@ -103,7 +112,9 @@ namespace QuasimorphCoop.Net
             }
         }
 
-        private static int LocalOwner => _role == Role.Host ? 0 : 1;
+        // The friend plays this merc (the host's chosen partner); the host plays the rest of the party.
+        // Decided by the host for every level sync, so it doesn't depend on party order.
+        private static string _friendMercId;
 
         private static string ModHash
         {
@@ -222,6 +233,7 @@ namespace QuasimorphCoop.Net
             _incoming.Clear();
             _pendingWorld = null;
             _hostLoaded = _clientReady = false;
+            _resyncs = 0;
             SteamNet.Instance?.Leave();
         }
 
@@ -235,6 +247,8 @@ namespace QuasimorphCoop.Net
             GameplayRng.Enabled = false;
             _inbox.Clear();
             _outbox.Clear();
+            ItemSync.Clear();
+            _resyncPending = false;
         }
 
         // ---------------------------------------------------------------- messages
@@ -326,6 +340,8 @@ namespace QuasimorphCoop.Net
             State state = CoopSession.State;
             state.Get<SaveManager>().SaveGame();
             int slot = state.Get<SavedGameMetadata>().Slot;
+            string partner = Partner.Get(state);
+            _friendMercId = CoopSession.Party.Any(p => p.Mercenary?.ProfileId == partner) ? partner : CoopSession.Party.Last().Mercenary?.ProfileId;
             _phase = Phase.Loading;
             _hostLoaded = _clientReady = false;
             SteamNet.Instance.StartCoroutine(SendWorldThenReload(slot, SlotFiles.Read(slot)));
@@ -358,6 +374,7 @@ namespace QuasimorphCoop.Net
             {
                 w.Write(files.Count);
                 w.Write(_seed);
+                w.Write(_friendMercId ?? "");
             }));
 
             foreach (byte[] chunk in chunks)
@@ -419,6 +436,7 @@ namespace QuasimorphCoop.Net
         {
             int count = r.ReadInt32();
             _seed = r.ReadInt32();
+            _friendMercId = r.ReadString();
             if (_incoming.Count != count || _incoming.Values.Any(p => p.Any(c => c == null)))
             {
                 Leave($"incomplete transfer ({_incoming.Count}/{count} files)");
@@ -446,6 +464,7 @@ namespace QuasimorphCoop.Net
                 Log.Info("World received while loading; will load it once settled.");
                 return;
             }
+            StopLockstep();
             SlotFiles.Write(SlotFiles.ClientSlot, _pendingWorld);
             _pendingWorld = null;
             Log.Info($"Loading host's world from slot {SlotFiles.ClientSlot}.");
@@ -479,9 +498,9 @@ namespace QuasimorphCoop.Net
             switch (_phase)
             {
                 case Phase.Loading:
-                    if (CoopSession.Party.Count != 2)
+                    if (!CoopSession.Party.Any(p => p.Mercenary?.ProfileId == _friendMercId) && CoopSession.Party.Count != 1)
                     {
-                        Leave($"party has {CoopSession.Party.Count} mercs after loading, expected 2");
+                        Leave($"your friend's merc '{_friendMercId}' isn't in the loaded party");
                         return;
                     }
                     if (_role == Role.Host)
@@ -520,6 +539,10 @@ namespace QuasimorphCoop.Net
                 StopLockstep();
                 _phase = Phase.Connected;
                 Log.Info("Level ended; lockstep paused until the next level syncs.");
+                if (_role == Role.Client && _loopback == Loopback.None)
+                {
+                    Notify($"Co-op: level over. Stay connected; the next level loads by itself when {SteamNet.Instance?.PeerName ?? "the host"} starts it. Changes you make meanwhile aren't kept.");
+                }
             }
         }
 
@@ -543,14 +566,19 @@ namespace QuasimorphCoop.Net
             _remoteHashes.Clear();
             _localDescriptions.Clear();
             _desyncReported = false;
+            _resyncPending = false;
+            ItemSync.Clear();
             _subscribed = CoopSession.State.Get<TurnController>();
             _subscribed.OnActionPointsProcessed += OnActionPointProcessed;
             _phase = Phase.Running;
-            Player mine = CoopSession.Party[LocalOwner];
-            Log.Info($"Lockstep running as {_role} (loopback {_loopback}), seed {seed}; local merc '{mine.Mercenary?.ProfileId}'.");
+            OnActionPointStarted(CoopSession.Creatures.Player);
+            Player mine = CoopSession.Party.FirstOrDefault(IsLocal);
+            Log.Info($"Lockstep running as {_role} (loopback {_loopback}), seed {seed}; local merc '{mine?.Mercenary?.ProfileId}', friend's merc '{_friendMercId}'.");
             if (_loopback == Loopback.None)
             {
-                Notify($"Co-op: playing with {SteamNet.Instance.PeerName}. You control {CoopSession.DisplayName(mine.Mercenary)}.");
+                Notify(mine != null
+                    ? $"Co-op: playing with {SteamNet.Instance.PeerName}. You control {CoopSession.DisplayName(mine.Mercenary)}."
+                    : $"Co-op: playing with {SteamNet.Instance.PeerName}. Your merc is down; you're watching.");
             }
         }
 
@@ -562,7 +590,13 @@ namespace QuasimorphCoop.Net
             {
                 case Loopback.Record: return CoopSession.IsMember(player);
                 case Loopback.Play: return false;
-                default: return CoopSession.Party.Count > LocalOwner && CoopSession.Party[LocalOwner] == player;
+                default:
+                    if (player == null || !CoopSession.IsMember(player))
+                    {
+                        return false;
+                    }
+                    bool friends = player.Mercenary?.ProfileId == _friendMercId;
+                    return _role == Role.Client ? friends : !friends;
             }
         }
 
@@ -610,12 +644,43 @@ namespace QuasimorphCoop.Net
         private static bool LocalWaiting()
         {
             State state = CoopSession.State;
-            return state != null && IsLocal(state.Get<Creatures>().Player)
-                && TurnSystem.CanProcessPlayerTurn(state.Get<TurnController>(), state.Get<TurnMetadata>(), state.Get<Creatures>())
-                && state.Get<PlayerCommandQueue>().Empty;
+            return state != null && IsLocal(state.Get<Creatures>().Player) && CanProcess(state) && state.Get<PlayerCommandQueue>().Empty;
+        }
+
+        // TurnSystem.CanProcessPlayerTurn without ReadOnlyScreensPatch, and only while the merc's
+        // action point is actually running: between the end of one and the start of the next the
+        // game still accepts input (it runs on the next one), which would be sent with the wrong
+        // action point number.
+        private static bool CanProcess(State state)
+        {
+            TurnMetadata turn = state.Get<TurnMetadata>();
+            Creatures creatures = state.Get<Creatures>();
+            return !turn.ForceLocked && !turn.PauseTimer.Started && state.Get<TurnController>().CurrentProcessable == creatures.Player
+                && creatures.Player.IsProcessing && !creatures.Player.IsAnimationInProgress && creatures.Player.CreatureData.Health.Alive;
         }
 
         public static bool LocalInputAllowed => !Engaged || (Running && IsLocal(CoopSession.Creatures?.Player));
+
+        // The other player's merc is on screen and a screen other than the HUD (inventory, health,
+        // corpse) is open: let it be looked at but not changed.
+        public static bool ScreensReadOnly
+        {
+            get
+            {
+                if (!Engaged || Replaying || GameplayRng.InSimulation || _actionDepth > 0 || LocalInputAllowed)
+                {
+                    return false;
+                }
+                try
+                {
+                    return UI.IsAnyShowing(typeof(DungeonHudScreen));
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+        }
 
         // Called for every PlayerCommandQueue.Add/AddFirst. Returns false to drop the command.
         public static bool OnCommandAdded(ICommand cmd)
@@ -658,23 +723,174 @@ namespace QuasimorphCoop.Net
             _actionDepth--;
         }
 
+        // Called before an inventory op (see InventoryOps). Same rules as BeginAction; a recorded op
+        // runs inside the gameplay RNG scope and the caller must call EndOp afterwards.
+        public static bool BeginOp(InventoryOp op, Action<BinaryWriter, State> args, out bool recorded)
+        {
+            recorded = false;
+            if (!Engaged || Replaying || GameplayRng.InSimulation || _actionDepth > 0)
+            {
+                return true;
+            }
+            if (!Running || !LocalWaiting())
+            {
+                Log.Info($"Blocked {op}: not your merc's turn.");
+                return false;
+            }
+            byte[] data;
+            using (MemoryStream ms = new MemoryStream())
+            using (BinaryWriter w = new BinaryWriter(ms))
+            {
+                FlushItems();
+                args(w, CoopSession.State);
+                w.Flush();
+                data = ms.ToArray();
+            }
+            Record(new NetEntry { Op = op, Data = data });
+            _actionDepth++;
+            GameplayRng.Enter();
+            recorded = true;
+            return true;
+        }
+
+        public static void EndOp()
+        {
+            GameplayRng.Exit();
+            _actionDepth--;
+            // The replay reproduces the op's own storage changes; only what happens next is news.
+            Player slot = CoopSession.Creatures?.Player;
+            if (Running && slot != null && IsLocal(slot))
+            {
+                ItemSync.ResetBaseline(CoopSession.State, slot);
+            }
+        }
+
+        // Player.IsProcessing is about to become false outside the simulation: the game ending an
+        // action point after inventory use or a corpse interaction. Returns false to block it.
+        public static int InDungeonUpdate;
+
+        public static bool OnPlayerTurnEnding(Player player)
+        {
+            if (!Running || InDungeonUpdate == 0 || Replaying || GameplayRng.InSimulation || _actionDepth > 0 || !player.IsProcessing || !player.AnyActionProcessedFlag)
+            {
+                return true;
+            }
+            if (IsLocal(player))
+            {
+                Record(new NetEntry { Op = InventoryOp.TurnEnd, Data = Array.Empty<byte>() });
+                CanonicalizeItems();
+                return true;
+            }
+            // The other player's merc: their machine says when its turn ends.
+            return !CoopSession.IsMember(player);
+        }
+
         private static void Record(NetEntry entry)
         {
+            if (entry.Op != InventoryOp.Items)
+            {
+                // Storage changes made before this input must reach the other machine before it.
+                FlushItems();
+            }
+            byte[] bytes;
+            try
+            {
+                bytes = CommandCodec.Encode(entry);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Failed to encode an action (desync likely): " + e);
+                Notify("Co-op: an action couldn't be sent; the games may now differ.");
+                return;
+            }
             if (_outbox.Count == 0)
             {
                 _outboxApSeq = _apSeq;
             }
-            _outbox.Add(entry);
+            _outbox.Add(new Recorded { Entry = entry, Bytes = bytes });
+            // World commands come with the screens closed; one carrying an item keeps a reference to it.
+            if (entry.Command != null && !(entry.Command is UsePlaceableCommand))
+            {
+                CanonicalizeItems();
+            }
+        }
+
+        private static void CanonicalizeItems()
+        {
+            try
+            {
+                ItemSync.Canonicalize(CoopSession.State);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Failed to reload sent item storages (desync likely): " + e);
+            }
+        }
+
+        // Sends storages the local player's merc changed through inventory screens since last time.
+        private static void FlushItems()
+        {
+            State state = CoopSession.State;
+            Player slot = state?.Get<Creatures>().Player;
+            if (!Running || slot == null || !IsLocal(slot))
+            {
+                return;
+            }
+            byte[] changes;
+            try
+            {
+                changes = ItemSync.TakeChanges(state, slot);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Failed to collect item changes (desync likely): " + e);
+                return;
+            }
+            if (changes != null)
+            {
+                Record(new NetEntry { Op = InventoryOp.Items, Data = changes });
+            }
+        }
+
+        // A party merc's action point begins: remember its reachable storages as they are now, so
+        // anything the player changes through screens during it shows up as a change.
+        public static void OnActionPointStarted(Player player)
+        {
+            if (!Running || player != CoopSession.Creatures?.Player || !IsLocal(player))
+            {
+                return;
+            }
+            CanonicalizeItems();
+            try
+            {
+                ItemSync.ResetBaseline(CoopSession.State, player);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Failed to read item storages: " + e);
+            }
+        }
+
+        // Per frame: look for storage changes now and then while the local merc waits for input and
+        // the player might be using a screen. (Every recorded input also checks first.)
+        private static void TrackItems()
+        {
+            if (Running && Time.unscaledTime >= _nextItemCheck && LocalWaiting() && (Input.anyKey || UI.IsAnyShowing(typeof(DungeonHudScreen))))
+            {
+                _nextItemCheck = Time.unscaledTime + 0.2f;
+                FlushItems();
+            }
         }
 
         public static void Flush()
         {
+            TrackItems();
             if (_outbox.Count == 0 || !Running)
             {
                 _outbox.Clear();
                 return;
             }
-            List<NetEntry> entries = new List<NetEntry>(_outbox);
+            List<Recorded> entries = new List<Recorded>(_outbox);
             _outbox.Clear();
             try
             {
@@ -682,12 +898,13 @@ namespace QuasimorphCoop.Net
                 {
                     w.Write(_outboxApSeq);
                     w.Write(entries.Count);
-                    foreach (NetEntry e in entries)
+                    foreach (Recorded e in entries)
                     {
-                        CommandCodec.WriteEntry(w, e);
+                        w.Write(e.Bytes.Length);
+                        w.Write(e.Bytes);
                     }
                 }));
-                Log.Info($"Sent batch ap={_outboxApSeq}: {Describe(entries)}");
+                Log.Info($"Sent batch ap={_outboxApSeq}: {Describe(entries.Select(e => e.Entry).ToList())}");
             }
             catch (Exception e)
             {
@@ -699,15 +916,23 @@ namespace QuasimorphCoop.Net
         // Replays the other player's inputs once the simulation reaches the point they were made at.
         public static void Update()
         {
-            if (!Running || _inbox.Count == 0 || CoopSession.State == null)
+            if (!Running || CoopSession.State == null)
             {
                 return;
             }
             State state = CoopSession.State;
             Creatures creatures = state.Get<Creatures>();
-            if (IsLocal(creatures.Player) || _apSeq < _inbox.Peek().ApSeq
-                || !TurnSystem.CanProcessPlayerTurn(state.Get<TurnController>(), state.Get<TurnMetadata>(), creatures)
-                || !state.Get<PlayerCommandQueue>().Empty)
+            bool idle = CanProcess(state) && state.Get<PlayerCommandQueue>().Empty;
+            if (_resyncPending && idle && _role == Role.Host)
+            {
+                _resyncPending = false;
+                Resync();
+                return;
+            }
+            // A turn that ended with a command still queued (input in the same frame the inventory
+            // closed) ends here the same way; the command then runs on the next action point.
+            if (_inbox.Count == 0 || IsLocal(creatures.Player) || _apSeq < _inbox.Peek().ApSeq
+                || !(idle || (CanProcess(state) && StartsWithTurnEnd(_inbox.Peek()))))
             {
                 return;
             }
@@ -716,24 +941,34 @@ namespace QuasimorphCoop.Net
             {
                 Log.Warn($"Batch for ap={batch.ApSeq} applied at ap={_apSeq}.");
             }
-            List<NetEntry> entries = new List<NetEntry>();
+            List<byte[]> raw = new List<byte[]>();
             using (BinaryReader r = new BinaryReader(new MemoryStream(batch.Payload)))
             {
                 int count = r.ReadInt32();
                 for (int i = 0; i < count; i++)
                 {
-                    entries.Add(CommandCodec.ReadEntry(r, state));
+                    raw.Add(r.ReadBytes(r.ReadInt32()));
                 }
             }
-            Log.Info($"Applying batch ap={batch.ApSeq}: {Describe(entries)}");
+            List<NetEntry> applied = new List<NetEntry>();
             Replaying = true;
             try
             {
-                foreach (NetEntry e in entries)
+                foreach (byte[] bytes in raw)
                 {
+                    NetEntry e;
+                    using (BinaryReader r = new BinaryReader(new MemoryStream(bytes)))
+                    {
+                        e = CommandCodec.ReadEntry(r, state);
+                    }
+                    applied.Add(e);
                     if (e.Command != null)
                     {
                         state.Get<PlayerCommandQueue>().Add(e.Command);
+                    }
+                    else if (e.Op != 0)
+                    {
+                        InventoryOps.Execute(state, e.Op, e.Data);
                     }
                     else
                     {
@@ -741,10 +976,22 @@ namespace QuasimorphCoop.Net
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                Log.Error($"Failed to apply batch ap={batch.ApSeq} after [{Describe(applied)}]: {ex}");
+                ReportDesync(_apSeq, "a received action couldn't be applied");
+            }
             finally
             {
                 Replaying = false;
             }
+            Log.Info($"Applied batch ap={batch.ApSeq}: {Describe(applied)}");
+        }
+
+        private static bool StartsWithTurnEnd(Batch batch)
+        {
+            // count, first entry length, kind 2 (op), op
+            return batch.Payload.Length >= 10 && batch.Payload[8] == 2 && batch.Payload[9] == (byte)InventoryOp.TurnEnd;
         }
 
         private static void Execute(State state, NetEntry e)
@@ -768,6 +1015,7 @@ namespace QuasimorphCoop.Net
         {
             return string.Join(", ", entries.Select(e => e.Command != null
                 ? e.Command.Type + (e.Command is MoveCommand m ? $"({m.target.X},{m.target.Y})" : e.Command is ShootCommand s ? $"({s.target.X},{s.target.Y})" : "")
+                : e.Op != 0 ? InventoryOps.Describe(e.Op, e.Data)
                 : e.Action + (e.Action == DirectAction.ChangeDirection ? $"({e.Arg})" : "")));
         }
 
@@ -802,6 +1050,15 @@ namespace QuasimorphCoop.Net
 
         private static void OnRemoteHash(int seq, string hash, string description)
         {
+            if (seq < 0)
+            {
+                if (Running)
+                {
+                    Log.Warn($"Friend reports a desync: {description}");
+                    ReportDesync(_apSeq, description);
+                }
+                return;
+            }
             if (_localHashes.TryGetValue(seq, out string local))
             {
                 string localDescription = _localDescriptions[seq];
@@ -817,13 +1074,56 @@ namespace QuasimorphCoop.Net
 
         private static void Compare(int seq, string localHash, string localDescription, string remoteHash, string remoteDescription)
         {
-            if (localHash == remoteHash || _desyncReported)
+            if (localHash == remoteHash)
+            {
+                return;
+            }
+            Log.Error($"DESYNC at ap={seq}\n  local:  {localDescription}\n  remote: {remoteDescription}");
+            ReportDesync(seq, "the games differ");
+        }
+
+        // The host fixes a desync by sending its world again (once a merc is waiting for input);
+        // the friend waits for it. A few seconds of loading instead of a broken session.
+        private static void ReportDesync(int seq, string what)
+        {
+            if (_desyncReported)
             {
                 return;
             }
             _desyncReported = true;
-            Log.Error($"DESYNC at ap={seq}\n  local:  {localDescription}\n  remote: {remoteDescription}");
-            Notify($"Co-op: the two games went out of sync at action {seq}. Send Player.log to the mod author.");
+            if (_loopback != Loopback.None)
+            {
+                Notify($"Co-op: out of sync at action {seq} ({what}).");
+                return;
+            }
+            if (_resyncs >= 5)
+            {
+                Notify($"Co-op: the games keep going out of sync ({what}). Send both Player.log files to the mod author.");
+                return;
+            }
+            Notify($"Co-op: the games went out of sync at action {seq}; re-syncing...");
+            if (_role == Role.Host)
+            {
+                _resyncPending = true;
+            }
+            else
+            {
+                SteamNet.Instance?.Send(Wire.Build(MsgType.Hash, w =>
+                {
+                    // Make sure the host notices even if its own comparison hasn't run yet.
+                    w.Write(-1);
+                    w.Write("resync");
+                    w.Write(what);
+                }));
+            }
+        }
+
+        private static void Resync()
+        {
+            _resyncs++;
+            Log.Warn($"Re-syncing the level (#{_resyncs}).");
+            StopLockstep();
+            SendWorldAndReload();
         }
     }
 }

@@ -37,15 +37,38 @@ namespace QuasimorphCoop.Lockstep
                     .Append('d').Append(((int)d.LookDirection).ToString(CultureInfo.InvariantCulture))
                     .Append('h').Append(d.Health.Value.ToString(CultureInfo.InvariantCulture))
                     .Append(d.Health.Alive ? "" : "x");
-                // Inventory changes made in UI screens aren't synced yet; make them show up as a desync.
                 if (c is Player && d.Inventory != null)
                 {
-                    sb.Append('i').Append(d.Inventory.BackpackStore?.Items.Count.ToString(CultureInfo.InvariantCulture) ?? "-")
-                        .Append('/').Append(d.Inventory.VestStore?.Items.Count.ToString(CultureInfo.InvariantCulture) ?? "-")
-                        .Append('w').Append(d.Inventory.CurrentWeapon?.Id ?? "-");
+                    sb.Append('i').Append(InventoryDigest(d.Inventory)).Append('w').Append((int)d.Inventory.CurrentSlotType);
                 }
             }
             return sb.ToString();
+        }
+
+        // Every item a merc carries: id, stack, position, and loaded ammo for weapons.
+        private static string InventoryDigest(Inventory inventory)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (ItemStorage storage in inventory.AllContainers)
+            {
+                sb.Append('|');
+                if (storage == null)
+                {
+                    continue;
+                }
+                foreach (BasePickupItem item in storage.Items)
+                {
+                    sb.Append(item.Id).Append('x').Append(item.StackCount.ToString(CultureInfo.InvariantCulture))
+                        .Append('@').Append(item.InventoryPos.X.ToString(CultureInfo.InvariantCulture)).Append(',').Append(item.InventoryPos.Y.ToString(CultureInfo.InvariantCulture));
+                    WeaponComponent weapon = item.Comp<WeaponComponent>();
+                    if (weapon != null)
+                    {
+                        sb.Append('a').Append(weapon.CurrentAmmo.ToString(CultureInfo.InvariantCulture));
+                    }
+                    sb.Append(';');
+                }
+            }
+            return Hash(sb.ToString()).Substring(0, 8);
         }
 
         public static string Hash(string description)

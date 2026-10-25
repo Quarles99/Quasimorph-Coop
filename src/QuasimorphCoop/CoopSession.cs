@@ -141,6 +141,27 @@ namespace QuasimorphCoop
             Log.Info($"Active merc: '{previous?.Mercenary?.ProfileId}' -> '{player.Mercenary?.ProfileId}' ({reason}).");
         }
 
+        // The deployed merc died but another party merc is alive: that one becomes the deployed merc,
+        // so saves, extraction and the mission result go with them. The dead one is resolved on the
+        // ship like any fallen party merc (see Fallen).
+        public static void Promote(Player survivor)
+        {
+            int index = _party.IndexOf(survivor);
+            if (index <= 0)
+            {
+                return;
+            }
+            Player fallen = _party[0];
+            _party[index] = fallen;
+            _party[0] = survivor;
+            if (fallen.Mercenary != null)
+            {
+                fallen.Mercenary.State = MercenaryState.None;
+            }
+            survivor.Mercenary.State = MercenaryState.InRaid;
+            Log.Info($"'{survivor.Mercenary.ProfileId}' is now the deployed merc (was '{fallen.Mercenary?.ProfileId}').");
+        }
+
         // Quietly swaps the slot without touching camera/HUD; used around saves.
         public static Player SwapSlotSilently(Player player)
         {

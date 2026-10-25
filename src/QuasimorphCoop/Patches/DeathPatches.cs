@@ -22,6 +22,15 @@ namespace QuasimorphCoop.Patches
                 return;
             }
             Log.Info($"Merc '{__instance.Mercenary?.ProfileId}' died; '{survivor.Mercenary?.ProfileId}' still alive, mission continues.");
+            if (__instance == CoopSession.Primary)
+            {
+                CoopSession.Promote(survivor);
+            }
+            if (__instance.Mercenary != null)
+            {
+                Fallen.Add(CoopSession.State, __instance.Mercenary.ProfileId);
+            }
+            Net.NetSession.Notify($"Co-op: {CoopSession.DisplayName(__instance.Mercenary)} is down. {CoopSession.DisplayName(survivor.Mercenary)} carries on.");
             UI.Hide<PreDeathBlockScreen>();
             UI.Chain<DungeonHudScreen>().Show();
             if (CoopSession.Creatures.Player == __instance)

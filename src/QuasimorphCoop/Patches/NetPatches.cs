@@ -105,19 +105,15 @@ namespace QuasimorphCoop.Patches
         private static Exception Finalizer(Exception __exception, bool __state) => DirectActionPatch.End(__exception, __state);
     }
 
-    // Reloading with a specific ammo item (picked in the inventory UI) can't be sent yet; only the plain reload.
+    // The plain reload key is a direct action. Reloading with a chosen ammo item (HUD, vest slot) isn't
+    // recorded here: the Player.StartReload it leads to is sent as an inventory op.
     [HarmonyPatch(typeof(PlayerInteractionSystem), nameof(PlayerInteractionSystem.Reload))]
     internal static class ReloadNetPatch
     {
         private static bool Prefix(BasePickupItem ammo, out bool __state)
         {
             __state = false;
-            if (ammo != null && NetSession.Engaged && !NetSession.Replaying && !Lockstep.GameplayRng.InSimulation)
-            {
-                NetSession.Notify("Co-op: reloading with a chosen ammo type isn't synced yet; use the reload key.");
-                return false;
-            }
-            return DirectActionPatch.Begin(DirectAction.Reload, 0, out __state);
+            return ammo != null || DirectActionPatch.Begin(DirectAction.Reload, 0, out __state);
         }
 
         private static Exception Finalizer(Exception __exception, bool __state) => DirectActionPatch.End(__exception, __state);
@@ -145,20 +141,5 @@ namespace QuasimorphCoop.Patches
         }
 
         private static Exception Finalizer(Exception __exception, bool __state) => DirectActionPatch.End(__exception, __state);
-    }
-
-    // Picking up items and looting corpses go through inventory UI that isn't synced yet.
-    [HarmonyPatch(typeof(PlayerInteractionSystem), nameof(PlayerInteractionSystem.TakeItemOrLootCorpse))]
-    internal static class LootNetPatch
-    {
-        private static bool Prefix()
-        {
-            if (NetSession.Engaged && !NetSession.Replaying)
-            {
-                NetSession.Notify("Co-op: picking up and looting aren't synced yet.");
-                return false;
-            }
-            return true;
-        }
     }
 }
