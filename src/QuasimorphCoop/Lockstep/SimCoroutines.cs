@@ -115,14 +115,50 @@ namespace QuasimorphCoop.Lockstep
             __state = (entered, saved);
         }
 
+        private static readonly System.Collections.Generic.Dictionary<Type, System.Reflection.FieldInfo> CurrentFields = new System.Collections.Generic.Dictionary<Type, System.Reflection.FieldInfo>();
+        private static readonly AccessTools.FieldRef<WaitForSeconds, float> Seconds = AccessTools.FieldRefAccess<WaitForSeconds, float>("m_Seconds");
+
         private static Exception Finalizer(object __instance, Exception __exception, (bool, UnityEngine.Random.State) __state)
         {
             if (__state.Item1)
             {
                 CoroutineStreams.Exit(__instance, __state.Item2);
+                if (__exception == null)
+                {
+                    TickWaits(__instance);
+                }
             }
             return __exception;
         }
+
+        // Waits inside simulation coroutines (the gap between a burst's shots, an explosion's delay)
+        // are game time, while projectiles move a fixed step per Tick_Dungeon: at another frame rate
+        // the next shot left when the previous bullet was somewhere else. Count those waits in ticks.
+        private static void TickWaits(object iterator)
+        {
+            Type type = iterator.GetType();
+            if (!CurrentFields.TryGetValue(type, out System.Reflection.FieldInfo field))
+            {
+                field = AccessTools.Field(type, "<>2__current");
+                CurrentFields[type] = field;
+            }
+            if (field?.GetValue(iterator) is WaitForSeconds wait)
+            {
+                field.SetValue(iterator, new WaitSimTicks(Mathf.Max(1, Mathf.RoundToInt(Seconds(wait) / FixedProjectileStep.Step))));
+            }
+        }
+    }
+
+    internal sealed class WaitSimTicks : CustomYieldInstruction
+    {
+        private readonly long _until;
+
+        public WaitSimTicks(int ticks)
+        {
+            _until = FixedProjectileStep.Ticks + ticks;
+        }
+
+        public override bool keepWaiting => FixedProjectileStep.Ticks < _until;
     }
 
     // Projectiles advance by frame time, so how many steps a shot takes (and which rolls happen
@@ -131,6 +167,9 @@ namespace QuasimorphCoop.Lockstep
     internal static class FixedProjectileStep
     {
         public const float Step = 1f / 30f;
+
+        // Tick_Dungeon calls with the fixed step so far (see WaitSimTicks).
+        public static long Ticks;
 
         private static bool _savedOverride;
         private static float _savedDelta;

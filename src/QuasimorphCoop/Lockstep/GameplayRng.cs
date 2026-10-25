@@ -143,6 +143,7 @@ namespace QuasimorphCoop.Lockstep
             __state = GameplayRng.Enabled;
             if (__state)
             {
+                FixedProjectileStep.Ticks++;
                 FixedProjectileStep.Begin();
             }
         }
