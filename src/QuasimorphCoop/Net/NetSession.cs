@@ -27,7 +27,7 @@ namespace QuasimorphCoop.Net
     //    exchange a state hash to catch desyncs.
     internal static partial class NetSession
     {
-        public const string ProtocolVersion = "5";
+        public const string ProtocolVersion = "6";
 
         private enum Role { None, Host, Client }
 

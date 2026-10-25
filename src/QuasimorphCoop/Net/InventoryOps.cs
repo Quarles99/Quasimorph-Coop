@@ -25,7 +25,7 @@ namespace QuasimorphCoop.Net
         Propagate,     // PlayerActionHappened       EffectsController.PropagateAction
         EndTurnCall,   // PlayerEndTurnContext       PlayerInteractionSystem.EndPlayerTurn
         TurnEnd,       // the action point ended outside the simulation (inventory closed, corpse opened)
-        Wound,         // wound slot id, mode, item, spendTurn   HealthScreen.WoundSlotOnClicked
+        Wound,         // wound slot id, mode, item, spendTurn, patient uid (0: self)   HealthScreen.WoundSlotOnClicked
         HealHP,        // obstacle                   HealStation.HealHP (see StationOps)
         HealWounds,    // obstacle                   HealStation.HealAllWounds
         Recharge,      // obstacle                   RechargeStation.RechargeImplants
@@ -92,7 +92,7 @@ namespace QuasimorphCoop.Net
                             player.IsProcessing = false;
                             break;
                         case InventoryOp.Wound:
-                            Wound(player, r.ReadString(), (HealthScreen.ApplyMedkitMode)r.ReadInt32(), ItemSync.ReadItem(r, state), r.ReadBoolean());
+                            Wound(player, r.ReadString(), (HealthScreen.ApplyMedkitMode)r.ReadInt32(), ItemSync.ReadItem(r, state), r.ReadBoolean(), r.ReadInt32());
                             break;
                         case InventoryOp.HealHP:
                         case InventoryOp.HealWounds:
@@ -138,15 +138,25 @@ namespace QuasimorphCoop.Net
         }
 
         // Clicks a wound slot on this machine's (possibly hidden) health screen, set up the way the
-        // other player's screen was.
-        private static void Wound(Player player, string slotId, HealthScreen.ApplyMedkitMode mode, BasePickupItem item, bool spendTurn)
+        // other player's screen was, for the same patient (see Treat).
+        private static void Wound(Player player, string slotId, HealthScreen.ApplyMedkitMode mode, BasePickupItem item, bool spendTurn, int patientUid)
         {
+            Player patient = patientUid == 0 ? player
+                : CoopSession.Party.FirstOrDefault(p => p.CreatureData.UniqueId == patientUid) ?? throw new InvalidDataException("No party merc " + patientUid);
             HealthScreen screen = UI.Get<HealthScreen>();
-            AccessTools.Method(typeof(HealthScreen), "RefreshWoundSlots").Invoke(screen, new object[] { player.CreatureData });
-            screen.StartApplyMedkitMode(item, mode, spendTurn);
-            List<WoundSlot> slots = Traverse.Create(screen).Field("_woundSlots").GetValue<List<WoundSlot>>();
-            WoundSlot slot = slots.FirstOrDefault(s => s.WoundSlotId == slotId) ?? throw new InvalidDataException("No wound slot " + slotId);
-            AccessTools.Method(typeof(HealthScreen), "WoundSlotOnClicked").Invoke(screen, new object[] { slot });
+            Treat.ReplayPatient = patient == player ? null : patient;
+            try
+            {
+                AccessTools.Method(typeof(HealthScreen), "RefreshWoundSlots").Invoke(screen, new object[] { patient.CreatureData });
+                screen.StartApplyMedkitMode(item, mode, spendTurn);
+                List<WoundSlot> slots = Traverse.Create(screen).Field("_woundSlots").GetValue<List<WoundSlot>>();
+                WoundSlot slot = slots.FirstOrDefault(s => s.WoundSlotId == slotId) ?? throw new InvalidDataException("No wound slot " + slotId);
+                AccessTools.Method(typeof(HealthScreen), "WoundSlotOnClicked").Invoke(screen, new object[] { slot });
+            }
+            finally
+            {
+                Treat.ReplayPatient = null;
+            }
         }
     }
 
@@ -303,7 +313,7 @@ namespace QuasimorphCoop.Net
             HealthScreen.ApplyMedkitMode mode = t.Field("_medkitMode").GetValue<HealthScreen.ApplyMedkitMode>();
             BasePickupItem item = t.Field("_medkitItem").GetValue<BasePickupItem>();
             bool spendTurn = t.Field("_spendTurnWhenFixWound").GetValue<bool>();
-            return OpPatch.Begin(InventoryOp.Wound, (w, s) => { w.Write(slotId); w.Write((int)mode); ItemSync.WriteItem(w, s, item); w.Write(spendTurn); }, out __state);
+            return OpPatch.Begin(InventoryOp.Wound, (w, s) => { w.Write(slotId); w.Write((int)mode); ItemSync.WriteItem(w, s, item); w.Write(spendTurn); w.Write(Treat.PatientUid(s.Get<Creatures>())); }, out __state);
         }
 
         private static Exception Finalizer(Exception __exception, bool __state) => OpPatch.End(__exception, __state);

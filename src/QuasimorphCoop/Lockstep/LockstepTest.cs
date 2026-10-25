@@ -46,6 +46,8 @@ namespace QuasimorphCoop.Lockstep
         private bool _exitPressed;
         private int _holdAt;
         private int _releaseAt;
+        private int _treatEvery;
+        private int _treatDoneAt = -1;
 
         public static bool Active => _instance != null;
 
@@ -265,6 +267,9 @@ namespace QuasimorphCoop.Lockstep
             string[] hold = Get("hold", "0-0").Split('-');
             _holdAt = int.Parse(hold[0], CultureInfo.InvariantCulture);
             _releaseAt = hold.Length > 1 ? int.Parse(hold[1], CultureInfo.InvariantCulture) : 0;
+            // treat=N: every Nth player action point, fixate a wound on an adjacent party merc
+            // through the Treat health screen, with a medkit from the acting merc's own inventory.
+            _treatEvery = int.Parse(Get("treat", "0"), CultureInfo.InvariantCulture);
             FinishGameProbe.Reason = null;
             Append($"stations {StationBot.Inventory(state)}");
 
@@ -321,6 +326,31 @@ namespace QuasimorphCoop.Lockstep
                     BasePickupItem item = SingletonMonoBehaviour<ItemFactory>.Instance.CreateForInventory(id.Trim());
                     bool taken = item != null && p.CreatureData.Inventory.TakeOrEquip(item, putIfSlotBusy: true);
                     Append($"gear P{p.CreatureData.UniqueId} {id}: {(taken ? "ok" : "failed")}");
+                }
+            }
+            if (_treatEvery > 0 && CoopSession.Party.Count > 1)
+            {
+                // The partner gets wounds (as the game's rndwound command does) and every merc gets
+                // a few kinds of medkit that fit the partner's body (organic or augmented).
+                Player partner = CoopSession.Party[1];
+                for (int i = 0; i < 3; i++)
+                {
+                    string slot = WoundSystem.GetRandomizedSlot(partner.CreatureData.WoundSlotMap, new List<string>());
+                    List<string> damageTypes = new List<string>(Data.DamageTypes.Ids);
+                    WoundSystem.AddWound(slot, WoundSystem.GetWoundTypeIdByDmgType(damageTypes[UnityEngine.Random.Range(0, damageTypes.Count)]), partner, WoundCategory.Normal);
+                    Append($"wound P{partner.CreatureData.UniqueId} {slot}");
+                }
+                HashSet<string> natures = new HashSet<string>(partner.CreatureData.WoundSlotMap.Keys.Select(k => Data.WoundSlots.GetRecord(k)?.NatureType).Where(n => n != null));
+                IDictionary records = Traverse.Create(Data.Items).Field("_records").GetValue<IDictionary>();
+                foreach (string id in records.Keys.Cast<string>().OrderBy(k => k, StringComparer.Ordinal)
+                    .Where(k => Data.Items.GetSimpleRecord<FixationMedicineRecord>(k)?.NatureTypes?.Any(natures.Contains) == true).Take(3))
+                {
+                    foreach (Player p in CoopSession.Party)
+                    {
+                        BasePickupItem item = SingletonMonoBehaviour<ItemFactory>.Instance.CreateForInventory(id);
+                        bool taken = item != null && p.CreatureData.Inventory.TakeOrEquip(item, putIfSlotBusy: true);
+                        Append($"gear P{p.CreatureData.UniqueId} {id}: {(taken ? "ok" : "failed")}");
+                    }
                 }
             }
             // The station bot's battery button needs batteries; hurt mercs and drained stations
@@ -485,6 +515,16 @@ namespace QuasimorphCoop.Lockstep
                 _releaseAt = 0;
                 Append($"bot release: {Net.NetSession.RequestHold(false)}");
             }
+            if (_treatEvery > 0 && _treatDoneAt != _apSeq && _playerAps % _treatEvery == 0)
+            {
+                _treatDoneAt = _apSeq;
+                string treated = TreatBot(player);
+                if (treated != null)
+                {
+                    Append($"bot P{player.CreatureData.UniqueId} treat {treated}");
+                    return;
+                }
+            }
             if (_inventoryBot != null && _inventoryDoneAt != _apSeq && _playerAps % _inventoryEvery == 0)
             {
                 _inventoryDoneAt = _apSeq;
@@ -560,6 +600,40 @@ namespace QuasimorphCoop.Lockstep
             Append($"bot P{player.CreatureData.UniqueId} move {step.X},{step.Y}");
             queue.Add(new MoveCommand(step.X, step.Y));
         }
+
+        // Opens the health screen on the first adjacent party merc with a wound to fixate and applies
+        // a fitting medkit from the healer's inventory. Null if there was nobody to treat.
+        private static string TreatBot(Player healer)
+        {
+            foreach (Player patient in Treat.Candidates().ToList())
+            {
+                Treat.Open(patient);
+                try
+                {
+                    HealthScreen health = UI.Get<HealthScreen>();
+                    foreach (WoundSlot slot in Traverse.Create(health).Field("_woundSlots").GetValue<List<WoundSlot>>().Where(s => s.HasWoundsToFixate))
+                    {
+                        BasePickupItem medkit = healer.CreatureData.Inventory.Storages.SelectMany(s => s.Items)
+                            .FirstOrDefault(i => i.Record<FixationMedicineRecord>()?.NatureTypes.Contains(slot.WoundSlotNature) == true);
+                        if (medkit == null)
+                        {
+                            continue;
+                        }
+                        string before = $"{Unfixated(patient)}/{Unfixated(healer)}";
+                        health.StartApplyMedkitMode(medkit, HealthScreen.ApplyMedkitMode.Fixate, spendTurn: true);
+                        AccessTools.Method(typeof(HealthScreen), "WoundSlotOnClicked").Invoke(health, new object[] { slot });
+                        return $"P{patient.CreatureData.UniqueId} {slot.WoundSlotId} with {medkit.Id}; unfixated patient/healer {before} -> {Unfixated(patient)}/{Unfixated(healer)}";
+                    }
+                }
+                finally
+                {
+                    UI.Hide<HealthScreen>();
+                }
+            }
+            return null;
+        }
+
+        private static int Unfixated(Player p) => p.CreatureData.EffectsController.OfType<BodyPartWound>().Count(w => !w.IsFixated);
 
         private static int Chebyshev(CellPosition a, CellPosition b) => Math.Max(Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
 

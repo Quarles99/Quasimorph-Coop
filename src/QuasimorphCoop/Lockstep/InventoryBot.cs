@@ -22,7 +22,7 @@ namespace QuasimorphCoop.Lockstep
             _rng = rng;
         }
 
-        private static readonly string[] Actions = { "drop", "take", "consume", "unload", "reload", "unequip", "equip", "loot", "move", "wound" };
+        private static readonly string[] Actions = { "drop", "take", "consume", "unload", "reload", "unequip", "equip", "loot", "move", "wound", "give" };
 
         public void Act(State state, Player player)
         {
@@ -159,6 +159,38 @@ namespace QuasimorphCoop.Lockstep
                     BasePickupItem item = corpse.CreatureData.Inventory.AllContainers.Where(s => s != null).SelectMany(s => s.Items).First();
                     AccessTools.Method(typeof(InventoryScreen), "Take").Invoke(screen, new object[] { item, true });
                     return item.Id;
+                }
+                case "give":
+                {
+                    // The partner's backpack tab (Give.cs) must be in the open inventory. The game's
+                    // own ways of opening it (inventory key, HUD button) configure the tabs right after.
+                    screen.ConfigureTabs();
+                    ItemTabsView tabs = Traverse.Create(screen).Field("_tabsView").GetValue<ItemTabsView>();
+                    ItemStorage target = Treat.Candidates().Select(p => p.CreatureData.Inventory.BackpackStore).FirstOrDefault(s => s != null && tabs.HasTab(s));
+                    if (target == null)
+                    {
+                        return Treat.Candidates().Any() ? "partner adjacent but no backpack tab" : "nobody adjacent";
+                    }
+                    BasePickupItem item = Pick(inv.BackpackStore.Items.Where(i => !i.Locked));
+                    if (item == null)
+                    {
+                        return "backpack empty";
+                    }
+                    CellPosition from = item.InventoryPos;
+                    inv.BackpackStore.Remove(item);
+                    for (int y = 0; y < target.Height; y++)
+                    {
+                        for (int x = 0; x < target.Width; x++)
+                        {
+                            if (ItemInteractionSystem.Move(item, target, new CellPosition(x, y), sendEvent: true, hasInventoryPos: true))
+                            {
+                                screen.DragControllerInteractionCallback(InventoryInteractionType.MoveItem);
+                                return $"{item.Id} -> partner {x},{y}";
+                            }
+                        }
+                    }
+                    inv.BackpackStore.TryPutItem(item, from, hasSpecialPos: true);
+                    return item.Id + " no room in partner backpack";
                 }
                 case "move":
                 {

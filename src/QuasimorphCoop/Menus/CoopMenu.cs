@@ -175,6 +175,14 @@ namespace QuasimorphCoop.Menus
                     Enabled = !NetSession.Engaged,
                     OnClick = () => CyclePartner(state)
                 });
+                if (NetSession.LocalInputAllowed)
+                {
+                    foreach (Player patient in Treat.Candidates())
+                    {
+                        Player p = patient;
+                        entries.Add(new Entry { Label = "Treat " + ShortName(p.Mercenary), OnClick = () => { Close(); Treat.Open(p); } });
+                    }
+                }
                 // Online that's the friend's merc on both machines (party merc 1, the host's partner).
                 Player target = Hold.Target(CoopSession.State);
                 if (target != null)
