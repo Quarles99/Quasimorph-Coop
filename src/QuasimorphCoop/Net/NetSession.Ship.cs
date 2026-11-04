@@ -338,7 +338,7 @@ namespace QuasimorphCoop.Net
                     if (_role == Role.Client)
                     {
                         long ticks = r.ReadInt64();
-                        ApplyClock(ticks, (TimeScale)r.ReadByte());
+                        ApplyClock(ticks, (TimeScale)r.ReadByte(), r.ReadDouble());
                     }
                     break;
                 case ShipMsg.Result:
@@ -468,26 +468,50 @@ namespace QuasimorphCoop.Net
             {
                 return;
             }
-            _nextClockSend = Time.unscaledTime + 2f;
+            _nextClockSend = Time.unscaledTime + 1f;
             long ticks = spaceTime.Time.Ticks;
             byte scale = (byte)spaceTime.TimeScale;
-            SendShip(ShipMsg.Clock, w => { w.Write(ticks); w.Write(scale); });
+            // Game seconds per real second as the host's clock is moving right now: zero while the
+            // host is paused, in a tutorial pause or in Bramfatura, and the travel speed in flight.
+            double rate = Time.deltaTime > 0f ? spaceTime.DeltaTime / Time.deltaTime : 0.0;
+            SendShip(ShipMsg.Clock, w => { w.Write(ticks); w.Write(scale); w.Write(rate); });
         }
 
-        // Friend: follow the host's ship clock. Travel and tutorial speeds depend on state the copy
-        // doesn't have, so for those only the time is taken and the copy keeps its own speed.
-        private static void ApplyClock(long ticks, TimeScale scale)
+        // Friend: the host's ship clock and how fast it runs. The copy's own clock logic is replaced
+        // by ClockPatch while these keep arriving, so travel, tutorial pauses and speed changes on the
+        // host's ship all carry over without the copy having their state.
+        private static double _clockRate;
+        private static float _clockReceivedAt = float.NegativeInfinity;
+
+        private static void ApplyClock(long ticks, TimeScale scale, double rate)
         {
             SpaceTime spaceTime = GetGlobalState()?.Get<SpaceTime>();
             if (spaceTime == null || !ShipClient)
             {
                 return;
             }
+            // Only for the speed buttons to show the right one; travel and tutorial are not buttons.
             if (scale != TimeScale.DynamicTravel && scale != TimeScale.TutorialPause)
             {
                 spaceTime.TimeScale = scale;
             }
             spaceTime.Time = new DateTime(ticks);
+            _clockRate = rate;
+            _clockReceivedAt = Time.unscaledTime;
+        }
+
+        // SpaceTimeSystem.Update's replacement on the friend's ship. Returns false (skip the game's
+        // own update) while the host's clock is being followed.
+        internal static bool FollowHostClock(SpaceTime spaceTime)
+        {
+            if (!ShipClient || Time.unscaledTime - _clockReceivedAt > 6f)
+            {
+                return true;
+            }
+            double seconds = _clockRate * Time.unscaledDeltaTime;
+            spaceTime.Time = spaceTime.Time.AddSeconds(seconds);
+            spaceTime.DeltaTime = (float)seconds;
+            return false;
         }
 
         // Per frame.

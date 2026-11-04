@@ -28,4 +28,11 @@ namespace QuasimorphCoop.Patches
     {
         private static bool Prefix() => Net.NetSession.AllowRecycle();
     }
+
+    // The friend's copy of the ship follows the host's clock, including travel and tutorial pauses.
+    [HarmonyPatch(typeof(SpaceTimeSystem), nameof(SpaceTimeSystem.Update))]
+    internal static class SpaceClockPatch
+    {
+        private static bool Prefix(SpaceTime spaceTime) => Net.NetSession.FollowHostClock(spaceTime);
+    }
 }
