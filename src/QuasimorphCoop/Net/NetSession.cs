@@ -565,13 +565,13 @@ namespace QuasimorphCoop.Net
                 || _onShip;
             if (!settled)
             {
-                Log.Info("World received while loading; will load it once settled.");
+                Log.Info($"World received while loading; will load it once settled (phase {_phase}, onShip {_onShip}, dungeon {SingletonMonoBehaviour<DungeonGameMode>.Instance != null}).");
                 return;
             }
             StopLockstep();
             SlotFiles.Write(SlotFiles.ClientSlot, _pendingWorld);
             _pendingWorld = null;
-            Log.Info($"Loading host's world from slot {SlotFiles.ClientSlot}.");
+            Log.Info($"Loading host's world from slot {SlotFiles.ClientSlot} (phase was {_phase}, friend's merc '{_friendMercId}').");
             _phase = Phase.Loading;
             SteamNet.Instance.StartCoroutine(LoadSlot(SlotFiles.ClientSlot));
         }
@@ -605,8 +605,16 @@ namespace QuasimorphCoop.Net
             }
         }
 
+        // For playtest logs: who is in the party and who holds the slot.
+        private static string DescribeParty()
+        {
+            Player slot = CoopSession.Creatures?.Player;
+            return $"slot '{slot?.Mercenary?.ProfileId}'; party [{string.Join(", ", CoopSession.Party.Select(p => $"{p.Mercenary?.ProfileId}#{p.CreatureData.UniqueId}@{p.CreatureData.Position.X},{p.CreatureData.Position.Y}"))}]; friend's merc '{_friendMercId}'";
+        }
+
         public static void OnDungeonStarted()
         {
+            Log.Info($"Dungeon started as {_role}, phase {_phase}: {DescribeParty()}.");
             switch (_phase)
             {
                 case Phase.Loading:
@@ -636,6 +644,7 @@ namespace QuasimorphCoop.Net
                     else
                     {
                         // Our own copy of a new level; the host's version is on its way.
+                        Log.Warn($"Own copy of the level generated; waiting for the host's world. Lockstep is not running, so the host's moves won't arrive until it loads. {(_pendingWorld != null ? "A world is already pending." : "")}");
                         _phase = Phase.AwaitingWorld;
                         TryLoadPendingWorld();
                     }

@@ -20,7 +20,7 @@ namespace QuasimorphCoop.Net
         // Ready: friend -> host, pressed Start (with the mission or station they had picked).
         // PickMerc: friend -> host, wants to play another roster merc. Picked: host -> friend, the merc
         // the friend now plays (answer to PickMerc, or the host changed the partner).
-        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result, Ready, PickMerc, Picked }
+        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result, Ready, PickMerc, Picked, Clock }
 
         private static int _shipBlobId;
         private static readonly Dictionary<int, byte[][]> _shipIncoming = new Dictionary<int, byte[][]>();
@@ -334,6 +334,13 @@ namespace QuasimorphCoop.Net
                         }
                     }
                     break;
+                case ShipMsg.Clock:
+                    if (_role == Role.Client)
+                    {
+                        long ticks = r.ReadInt64();
+                        ApplyClock(ticks, (TimeScale)r.ReadByte());
+                    }
+                    break;
                 case ShipMsg.Result:
                     if (_role == Role.Client)
                     {
@@ -446,9 +453,47 @@ namespace QuasimorphCoop.Net
             return reason;
         }
 
+        // Host: the ship clock and its speed, as last sent. The friend's copy of the ship runs its own
+        // clock, so fast forward on the host's ship would otherwise leave theirs behind.
+        private static float _nextClockSend;
+
+        private static void HostSendClock()
+        {
+            if (!ShipHost || !_onShip || Time.unscaledTime < _nextClockSend)
+            {
+                return;
+            }
+            SpaceTime spaceTime = GetGlobalState()?.Get<SpaceTime>();
+            if (spaceTime == null)
+            {
+                return;
+            }
+            _nextClockSend = Time.unscaledTime + 2f;
+            long ticks = spaceTime.Time.Ticks;
+            byte scale = (byte)spaceTime.TimeScale;
+            SendShip(ShipMsg.Clock, w => { w.Write(ticks); w.Write(scale); });
+        }
+
+        // Friend: follow the host's ship clock. Travel and tutorial speeds depend on state the copy
+        // doesn't have, so for those only the time is taken and the copy keeps its own speed.
+        private static void ApplyClock(long ticks, TimeScale scale)
+        {
+            SpaceTime spaceTime = GetGlobalState()?.Get<SpaceTime>();
+            if (spaceTime == null || !ShipClient)
+            {
+                return;
+            }
+            if (scale != TimeScale.DynamicTravel && scale != TimeScale.TutorialPause)
+            {
+                spaceTime.TimeScale = scale;
+            }
+            spaceTime.Time = new DateTime(ticks);
+        }
+
         // Per frame.
         public static void ShipTick()
         {
+            HostSendClock();
             if (_pendingShip != null && !Dragging())
             {
                 Dictionary<string, string> entries = _pendingShip;
