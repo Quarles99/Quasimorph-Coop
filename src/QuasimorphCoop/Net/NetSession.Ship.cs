@@ -20,7 +20,98 @@ namespace QuasimorphCoop.Net
         // Ready: friend -> host, pressed Start (with the mission or station they had picked).
         // PickMerc: friend -> host, wants to play another roster merc. Picked: host -> friend, the merc
         // the friend now plays (answer to PickMerc, or the host changed the partner).
-        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result, Ready, PickMerc, Picked }
+        // Clock: host -> friend, the ship's time, speed and flight timer, a few times a second.
+        // World: host -> friend, campaign components that changed. Travel: host -> friend, the ship
+        // left orbit (see NetSession.World).
+        private enum ShipMsg : byte { Request = 1, Snapshot, Change, Result, Ready, PickMerc, Picked, Clock, World, Travel }
+
+        // ---------------------------------------------------------------- ship clock
+        //
+        // The ship's clock (SpaceTime) runs from SpaceTimeSystem.Update on each machine, at each
+        // player's own speed setting, so the friend's copy drifted from the host's as soon as the
+        // host sped time up. The host now sends its clock; on the friend's copy the game's own
+        // update still runs, then the host's time, speed and flight timer overwrite it. The
+        // friend's speed buttons therefore follow the host's.
+        private const float ClockInterval = 0.25f;
+        private static float _nextClockSend;
+        private static TimeScale _sentScale;
+        private static bool _sentPaused;
+        private static bool _sentTravelRunning;
+
+        private static bool _hasHostClock;
+        private static DateTime _hostTime;
+        private static TimeScale _hostScale;
+        private static bool _clockNoticeShown;
+
+        private static void HostSendClock()
+        {
+            if (!ShipHost || !_onShip || !(SteamNet.Instance?.HasPeer ?? false))
+            {
+                return;
+            }
+            SpaceTime time = GetGlobalState()?.Get<SpaceTime>();
+            if (time == null)
+            {
+                return;
+            }
+            TravelMetadata travel = GetGlobalState()?.Get<TravelMetadata>();
+            bool travelRunning = travel != null && travel.IsInTravel && travel.TravelTimer.Started;
+            bool changed = time.TimeScale != _sentScale || time.Paused != _sentPaused || travelRunning != _sentTravelRunning;
+            if (!changed && Time.unscaledTime < _nextClockSend)
+            {
+                return;
+            }
+            _nextClockSend = Time.unscaledTime + ClockInterval;
+            _sentScale = time.TimeScale;
+            _sentPaused = time.Paused;
+            _sentTravelRunning = travelRunning;
+            long ticks = time.Time.Ticks;
+            byte scale = (byte)time.TimeScale;
+            bool paused = time.Paused;
+            SendShip(ShipMsg.Clock, w => { w.Write(ticks); w.Write(scale); w.Write(paused); WriteTravelClock(w, travel); });
+        }
+
+        private static void OnHostClock(BinaryReader r)
+        {
+            long ticks = r.ReadInt64();
+            TimeScale scale = (TimeScale)r.ReadByte();
+            r.ReadBoolean(); // the host's pause, sent for later use
+            ReadTravelClock(r);
+            if (_role != Role.Client)
+            {
+                return;
+            }
+            _hostTime = new DateTime(ticks);
+            _hostScale = scale;
+            _hasHostClock = true;
+        }
+
+        // SpaceTimeSystem.Update postfix: on the friend's copy of the ship, the host's clock wins.
+        public static void ApplyHostClock(SpaceTime time, TravelMetadata travel)
+        {
+            if (!_hasHostClock || !ShipClient || time == null)
+            {
+                return;
+            }
+            if (!_clockNoticeShown)
+            {
+                _clockNoticeShown = true;
+                Notify($"Co-op: ship time follows {PeerName}'s clock and speed.");
+            }
+            DateTime previous = time.Time;
+            time.Time = _hostTime;
+            time.TimeScale = _hostScale;
+            // Systems that read DeltaTime this frame see how far the host's clock moved, not this copy's.
+            time.DeltaTime = (float)Math.Max(0.0, (_hostTime - previous).TotalSeconds);
+            ApplyHostTravelClock(travel);
+        }
+
+        private static void ResetShipClock()
+        {
+            _hasHostClock = false;
+            _clockNoticeShown = false;
+            _nextClockSend = 0f;
+        }
 
         private static int _shipBlobId;
         private static readonly Dictionary<int, byte[][]> _shipIncoming = new Dictionary<int, byte[][]>();
@@ -72,17 +163,20 @@ namespace QuasimorphCoop.Net
             {
                 return;
             }
+            // Also tells the host to start sending its star map (see NetSession.World).
+            SendShip(ShipMsg.Request, w => w.Write(false));
             State global = GetGlobalState();
             if (FriendMerc(global) == null)
             {
                 return;
             }
-            SendShip(ShipMsg.Request, w => w.Write(false));
             Notify($"Co-op: this is a copy of {PeerName}'s ship. Change {FriendMercName(global)}'s gear in the Equipment screen and it's sent to {PeerName}; other changes here aren't kept.");
         }
 
         private static void OnShipLeft()
         {
+            ResetShipClock();
+            ResetWorld();
             _editingOwnMerc = false;
             _pendingShip = null;
             if (_role == Role.Host && _friendEditing)
@@ -272,6 +366,7 @@ namespace QuasimorphCoop.Net
                     if (_role == Role.Host)
                     {
                         bool arsenal = r.ReadBoolean();
+                        HostFriendOnShip(arrived: !arsenal);
                         if (HostSendSnapshot())
                         {
                             if (arsenal)
@@ -299,6 +394,7 @@ namespace QuasimorphCoop.Net
                 case ShipMsg.Change:
                     if (_role == Role.Host)
                     {
+                        HostFriendOnShip(arrived: false);
                         int version = r.ReadInt32();
                         HostApplyChange(version, ShipSync.Read(r));
                     }
@@ -306,6 +402,7 @@ namespace QuasimorphCoop.Net
                 case ShipMsg.Ready:
                     if (_role == Role.Host)
                     {
+                        HostFriendOnShip(arrived: false);
                         string suggestion = r.ReadString();
                         _friendReady = true;
                         Notify($"Co-op: {PeerName} is ready" + (suggestion.Length > 0 ? $" and suggests {suggestion}." : "."));
@@ -314,6 +411,7 @@ namespace QuasimorphCoop.Net
                 case ShipMsg.PickMerc:
                     if (_role == Role.Host)
                     {
+                        HostFriendOnShip(arrived: false);
                         HostPickMerc(r.ReadString());
                     }
                     break;
@@ -332,6 +430,21 @@ namespace QuasimorphCoop.Net
                         {
                             Notify($"Co-op: {PeerName}'s game didn't switch your merc ({reason}).");
                         }
+                    }
+                    break;
+                case ShipMsg.Clock:
+                    OnHostClock(r);
+                    break;
+                case ShipMsg.World:
+                    if (_role == Role.Client)
+                    {
+                        OnWorld(r);
+                    }
+                    break;
+                case ShipMsg.Travel:
+                    if (_role == Role.Client)
+                    {
+                        OnTravel(r);
                     }
                     break;
                 case ShipMsg.Result:
@@ -449,6 +562,9 @@ namespace QuasimorphCoop.Net
         // Per frame.
         public static void ShipTick()
         {
+            HostSendClock();
+            HostWorldTick();
+            ClientWorldTick();
             if (_pendingShip != null && !Dragging())
             {
                 Dictionary<string, string> entries = _pendingShip;

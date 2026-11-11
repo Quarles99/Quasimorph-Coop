@@ -44,12 +44,38 @@ namespace QuasimorphCoop
                 _party.Add(primary);
             }
             Log.Info($"Dungeon started; primary merc '{primary?.Mercenary?.ProfileId}'.");
-            if (primary != null)
+            if (primary != null && Net.NetSession.Active && InTutorial(state))
+            {
+                // Online, the tutorial is played solo (see InTutorial); a carried-over partner stays on the ship.
+                Log.Info("Tutorial mission with a co-op session open: no partner on this level.");
+                Net.NetSession.Notify("Co-op: the tutorial missions are single-player, so your partner sits this one out. Your friend joins on your next mission.");
+            }
+            else if (primary != null)
             {
                 PartyPersistence.SpawnPending();
                 Partner.AutoAdd();
             }
             PartyPersistence.Pending = null;
+        }
+
+        // The tutorial story missions (tutorial_1_defense, tutorial_2_revenge) can't be played online.
+        // Their scripts (BaseDungeonScenario checkpoints) are per-frame coroutines outside the
+        // simulation: they wait for this machine's own screens (the inventory), clear the command
+        // queue, add wounds and effects and spawn items at frame-dependent moments, all on whichever
+        // merc is in the slot. The two games drift apart and end up waiting on each other's turn.
+        public static bool InTutorial(State state)
+        {
+            try
+            {
+                RaidMetadata raid = state?.Get<RaidMetadata>();
+                Mission mission = raid == null ? null : state.Get<Missions>()?.Get(raid);
+                return mission != null && mission.IsStoryMission && mission.StoryId != null && mission.StoryId.StartsWith("tutorial_");
+            }
+            catch (Exception e)
+            {
+                Log.Warn("Couldn't tell whether this is a tutorial mission: " + e.Message);
+                return false;
+            }
         }
 
         public static string DisplayName(Mercenary mercenary)
