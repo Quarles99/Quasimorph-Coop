@@ -27,7 +27,7 @@ namespace QuasimorphCoop.Net
     //    exchange a state hash to catch desyncs.
     internal static partial class NetSession
     {
-        public const string ProtocolVersion = "7";
+        public const string ProtocolVersion = "8";
 
         private enum Role { None, Host, Client }
 
@@ -62,6 +62,14 @@ namespace QuasimorphCoop.Net
         private static bool _resyncPending;
         private static int _resyncs;
         private static float _nextItemCheck;
+
+        // Stall detection. A hash mismatch only shows up once both games finish the same action
+        // point; if they disagree on whose turn it is, this game waits for an input the other one
+        // will never send and no hash is ever compared. So: the friend is past our action point,
+        // we're waiting on their merc with nothing to replay, and nothing has moved for a while.
+        private const float StallSeconds = 15f;
+        private static int _remoteMaxSeq;
+        private static float _lastProgress;
 
         private static readonly Dictionary<string, byte[][]> _incoming = new Dictionary<string, byte[][]>();
         private static Dictionary<string, byte[]> _pendingWorld;
@@ -248,6 +256,8 @@ namespace QuasimorphCoop.Net
             _shipSent = _shipBaseline = null;
             _friendEditing = _editingOwnMerc = false;
             _pendingShip = null;
+            ResetShipClock();
+            ResetWorld();
             SteamNet.Instance?.Leave();
         }
 
@@ -347,6 +357,7 @@ namespace QuasimorphCoop.Net
                     case MsgType.Bye: Stop($"{SteamNet.Instance.PeerName} left: {r.ReadString()}"); break;
                     case MsgType.Ping: break;
                     case MsgType.ShipChunk: OnShipChunk(r); break;
+                    case MsgType.Notice: Notify(r.ReadString()); break;
                 }
             }
         }
@@ -409,6 +420,13 @@ namespace QuasimorphCoop.Net
                     SendShipSave();
                 }
                 Notify($"Co-op: {SteamNet.Instance.PeerName} will join you when you start a mission.");
+                return;
+            }
+            if (CoopSession.InTutorial(CoopSession.State))
+            {
+                Notify($"Co-op: the tutorial missions are single-player. Finish this one solo; {SteamNet.Instance.PeerName} joins your next mission.");
+                SteamNet.Instance.Send(Wire.Build(MsgType.Notice, w => w.Write(
+                    $"Co-op: {SteamNet.Instance.PeerName} is in a tutorial mission, which is single-player. Stay connected; you'll join their next mission.")));
                 return;
             }
             if (CoopSession.Party.Count != 2)
@@ -688,6 +706,8 @@ namespace QuasimorphCoop.Net
             _localDescriptions.Clear();
             _desyncReported = false;
             _resyncPending = false;
+            _remoteMaxSeq = 0;
+            _lastProgress = Time.unscaledTime;
             ItemSync.Clear();
             _subscribed = CoopSession.State.Get<TurnController>();
             _subscribed.OnActionPointsProcessed += OnActionPointProcessed;
@@ -1070,6 +1090,7 @@ namespace QuasimorphCoop.Net
                 Resync();
                 return;
             }
+            CheckStall(state, creatures, idle);
             // A turn that ended with a command still queued (input in the same frame the inventory
             // closed) ends here the same way; the command then runs on the next action point.
             if (_inbox.Count == 0 || IsLocal(creatures.Player) || _apSeq < _inbox.Peek().ApSeq
@@ -1126,7 +1147,25 @@ namespace QuasimorphCoop.Net
             {
                 Replaying = false;
             }
+            _lastProgress = Time.unscaledTime;
             Log.Info($"Applied batch ap={batch.ApSeq}: {Describe(applied)}");
+        }
+
+        private static void CheckStall(State state, Creatures creatures, bool idle)
+        {
+            if (_desyncReported || !idle || IsLocal(creatures.Player) || Hold.IsHeld(creatures.Player) || _remoteMaxSeq <= _apSeq
+                || (_inbox.Count > 0 && _inbox.Peek().ApSeq <= _apSeq))
+            {
+                return;
+            }
+            if (Time.unscaledTime - _lastProgress < StallSeconds)
+            {
+                return;
+            }
+            Log.Error($"STALL at ap={_apSeq}: waiting on '{creatures.Player.Mercenary?.ProfileId}' for {StallSeconds}s with nothing to replay, "
+                + $"while the friend is at ap={_remoteMaxSeq}; inbox={_inbox.Count}"
+                + (_inbox.Count > 0 ? $" (next for ap={_inbox.Peek().ApSeq})" : "") + ".");
+            ReportDesync(_apSeq, "the games disagree on whose turn it is");
         }
 
         private static bool StartsWithTurnEnd(Batch batch)
@@ -1168,6 +1207,7 @@ namespace QuasimorphCoop.Net
                 return;
             }
             _apSeq++;
+            _lastProgress = Time.unscaledTime;
             State state = CoopSession.State;
             string description = StateHash.Describe(state.Get<Creatures>(), state.Get<RaidMetadata>().TurnNumber, state.Get<MapObstacles>());
             string hash = StateHash.Hash(description);
@@ -1201,6 +1241,7 @@ namespace QuasimorphCoop.Net
                 }
                 return;
             }
+            _remoteMaxSeq = Math.Max(_remoteMaxSeq, seq);
             if (_localHashes.TryGetValue(seq, out string local))
             {
                 string localDescription = _localDescriptions[seq];

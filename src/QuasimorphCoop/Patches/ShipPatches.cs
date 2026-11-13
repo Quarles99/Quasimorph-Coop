@@ -23,16 +23,16 @@ namespace QuasimorphCoop.Patches
         private static bool Prefix(PrepareRaidScreen __instance) => Net.NetSession.AllowMissionStart(__instance);
     }
 
+    // The friend's copy of the ship keeps the host's time, speed and flight timer.
+    [HarmonyPatch(typeof(SpaceTimeSystem), nameof(SpaceTimeSystem.Update))]
+    internal static class SpaceClockPatch
+    {
+        private static void Postfix(SpaceTime spaceTime, TravelMetadata travelData) => Net.NetSession.ApplyHostClock(spaceTime, travelData);
+    }
+
     [HarmonyPatch(typeof(ScreenWithShipCargo), "RecycleButtonOnClick")]
     internal static class RecyclePatch
     {
         private static bool Prefix() => Net.NetSession.AllowRecycle();
-    }
-
-    // The friend's copy of the ship follows the host's clock, including travel and tutorial pauses.
-    [HarmonyPatch(typeof(SpaceTimeSystem), nameof(SpaceTimeSystem.Update))]
-    internal static class SpaceClockPatch
-    {
-        private static bool Prefix(SpaceTime spaceTime) => Net.NetSession.FollowHostClock(spaceTime);
     }
 }

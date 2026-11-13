@@ -21,7 +21,8 @@ namespace QuasimorphCoop.Net
         Bye,            // either: leaving the session
         Ping,           // either: keepalive
         Welcome,        // host -> client: accepted, connection lasts across levels
-        ShipChunk       // either: piece of a compressed ship message (gear between missions, see ShipSync)
+        ShipChunk,      // either: piece of a compressed ship message (gear between missions, see ShipSync)
+        Notice          // host -> client: a line to show the friend (e.g. why the level isn't shared)
     }
 
     // Actions that bypass PlayerCommandQueue and are called directly from input handling.

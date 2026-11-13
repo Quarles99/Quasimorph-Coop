@@ -60,6 +60,11 @@ namespace QuasimorphCoop
             {
                 return;
             }
+            if (Net.NetSession.Active && CoopSession.InTutorial(state))
+            {
+                Net.NetSession.Notify("Co-op: no partner in the tutorial missions; they're single-player. Your partner joins on your next mission.");
+                return;
+            }
             Mercenary mercenary = state.Get<Mercenaries>().Get(id);
             if (mercenary == CoopSession.Primary.Mercenary)
             {
