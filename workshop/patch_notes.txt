@@ -1,0 +1,14 @@
+[h1]Patch notes: ship clock sync[/h1]
+
+[h2]Fixes[/h2]
+[list]
+[*]The friend's ship clock now follows the host's. Fast forward, travel, tutorial pauses, Bramfatura and speed changes on the host's ship all carry over, instead of the friend's copy running at its own pace and falling behind.
+[*]If the host's updates stop arriving, the friend's ship falls back to its own clock after a few seconds, so it never freezes.
+[/list]
+
+[h2]Diagnostics[/h2]
+[list]
+[*]More detail is now written to Player.log when a mission starts (party, slot merc, phase) and when the host's world is received or deferred. If you end up in your own copy of the level instead of the host's, please send both players' Player.log files.
+[/list]
+
+[b]Both players must update to this build.[/b] The host refuses to start a session if the mod versions don't match.
