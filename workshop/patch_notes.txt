@@ -1,14 +1,16 @@
-[h1]Patch notes: ship clock sync[/h1]
+[h1]Patch notes: desync fixes[/h1]
 
 [h2]Fixes[/h2]
 [list]
-[*]The friend's ship clock now follows the host's. Fast forward, travel, tutorial pauses, Bramfatura and speed changes on the host's ship all carry over, instead of the friend's copy running at its own pace and falling behind.
-[*]If the host's updates stop arriving, the friend's ship falls back to its own clock after a few seconds, so it never freezes.
+[*]Tutorial missions are now solo while a co-op session is open. Their scripted scenes run outside the simulation and drifted apart between the two games. Your friend gets a notice explaining why.
+[*]Stalls are detected: if your friend's game is ahead and yours has been waiting on their merc for 15 seconds with nothing to replay, the games resync on their own.
+[*]The friend's ship clock follows the host's time, speed and flight timer, including travel and tutorial pauses.
+[*]The friend's star map now mirrors the host's. The friend's copy no longer simulates its own ship; the host sends the campaign changes and departures.
 [/list]
 
 [h2]Diagnostics[/h2]
 [list]
-[*]More detail is now written to Player.log when a mission starts (party, slot merc, phase) and when the host's world is received or deferred. If you end up in your own copy of the level instead of the host's, please send both players' Player.log files.
+[*]More detail is written to Player.log when a mission starts and when the host's world is received. If you end up in your own copy of the level instead of the host's, please send both players' Player.log files.
 [/list]
 
-[b]Both players must update to this build.[/b] The host refuses to start a session if the mod versions don't match.
+[b]Both players must update to this build.[/b] The network protocol changed (v8), and the host refuses a session if the mod versions don't match.
